@@ -98,3 +98,4 @@ bun typecheck  # TypeScript checking
 | February 2026 | Added separate smart parsing input field above prescription table |
 | February 2026 | Fixed combination medicine autocomplete - added database store initialization and seed data |
 | February 2026 | Cloned from newsoftware1.git repository, ready for continued development |
+| February 2026 | Enhanced pharmacy module: 25/75 layout, Prepared tab, Reopen functionality |
