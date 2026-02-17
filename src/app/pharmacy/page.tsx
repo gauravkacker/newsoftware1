@@ -27,6 +27,8 @@ interface PharmacyQueueItemWithDetails extends PharmacyQueueItem {
   hasUpdates?: boolean; // Track if doctor made changes
 }
 
+type TabType = 'active' | 'prepared';
+
 // Generate ID
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -35,70 +37,88 @@ function generateId(): string {
 export default function PharmacyPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [queueItems, setQueueItems] = useState<PharmacyQueueItemWithDetails[]>([]);
+  const [preparedItems, setPreparedItems] = useState<PharmacyQueueItemWithDetails[]>([]);
   const [selectedItem, setSelectedItem] = useState<PharmacyQueueItemWithDetails | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [notification, setNotification] = useState<string | null>(null);
   const [lastUpdateTime, setLastUpdateTime] = useState<number>(0);
+  const [activeTab, setActiveTab] = useState<TabType>('active');
   const previousPrescriptionIds = useRef<Map<string, string>>(new Map());
   
   // Load queue data
   const loadQueue = useCallback(() => {
     setIsLoading(true);
     
-    // Get all pending and preparing items from pharmacy queue
-    const allItems = pharmacyQueueDb.getAll();
+    // Get all items from pharmacy queue
+    const allItems = pharmacyQueueDb.getAll() as PharmacyQueueItem[];
+    
+    // Separate active and prepared items
     const activeItems = allItems.filter(
       (item) => item.status === 'pending' || item.status === 'preparing'
-    ) as PharmacyQueueItem[];
+    );
+    const preparedItemsList = allItems.filter(
+      (item) => item.status === 'prepared'
+    );
     
     // Sort: priority first, then by creation time (oldest first)
-    const sortedItems = activeItems.sort((a, b) => {
-      // Priority patients first
-      if (a.priority && !b.priority) return -1;
-      if (!a.priority && b.priority) return 1;
-      
-      // Oldest first
-      const timeA = a.createdAt instanceof Date ? a.createdAt.getTime() : new Date(a.createdAt).getTime();
-      const timeB = b.createdAt instanceof Date ? b.createdAt.getTime() : new Date(b.createdAt).getTime();
-      return timeA - timeB;
-    });
+    const sortItems = <T extends PharmacyQueueItem>(items: T[]): T[] => {
+      return items.sort((a, b) => {
+        // Priority patients first
+        if (a.priority && !b.priority) return -1;
+        if (!a.priority && b.priority) return 1;
+        
+        // Oldest first
+        const timeA = a.createdAt instanceof Date ? a.createdAt.getTime() : new Date(a.createdAt).getTime();
+        const timeB = b.createdAt instanceof Date ? b.createdAt.getTime() : new Date(b.createdAt).getTime();
+        return timeA - timeB;
+      });
+    };
+    
+    const sortedActiveItems = sortItems(activeItems);
+    const sortedPreparedItems = sortItems(preparedItemsList);
     
     // Enrich with patient and prescription details
-    const enrichedItems: PharmacyQueueItemWithDetails[] = sortedItems.map((item) => {
-      // Get patient info
-      const patient = patientDb.getById(item.patientId) as PatientInfo | undefined;
-      
-      // Get visit details
-      const visit = doctorVisitDb.getById(item.visitId);
-      
-      // Get prescriptions for this visit
-      const prescriptions = doctorPrescriptionDb.getByVisit(item.visitId);
-      
-      // Check if there are updates from doctor (compare prescription IDs/content)
-      const currentPrescriptionIds = prescriptions.map(p => p.id).join(',');
-      const previousIds = previousPrescriptionIds.current.get(item.id);
-      const hasUpdates = previousIds !== undefined && previousIds !== currentPrescriptionIds;
-      
-      // Update the ref
-      previousPrescriptionIds.current.set(item.id, currentPrescriptionIds);
-      
-      return {
-        ...item,
-        patient,
-        visit: visit || undefined,
-        prescriptions,
-        hasUpdates,
-      };
-    });
+    const enrichItems = (items: PharmacyQueueItem[]): PharmacyQueueItemWithDetails[] => {
+      return items.map((item) => {
+        // Get patient info
+        const patient = patientDb.getById(item.patientId) as PatientInfo | undefined;
+        
+        // Get visit details
+        const visit = doctorVisitDb.getById(item.visitId);
+        
+        // Get prescriptions for this visit
+        const prescriptions = doctorPrescriptionDb.getByVisit(item.visitId);
+        
+        // Check if there are updates from doctor (compare prescription IDs/content)
+        const currentPrescriptionIds = prescriptions.map(p => p.id).join(',');
+        const previousIds = previousPrescriptionIds.current.get(item.id);
+        const hasUpdates = previousIds !== undefined && previousIds !== currentPrescriptionIds;
+        
+        // Update the ref
+        previousPrescriptionIds.current.set(item.id, currentPrescriptionIds);
+        
+        return {
+          ...item,
+          patient,
+          visit: visit || undefined,
+          prescriptions,
+          hasUpdates,
+        };
+      });
+    };
+    
+    const enrichedActiveItems = enrichItems(sortedActiveItems);
+    const enrichedPreparedItems = enrichItems(sortedPreparedItems);
     
     // Check for new notifications
-    const itemsWithUpdates = enrichedItems.filter(item => item.hasUpdates);
+    const itemsWithUpdates = enrichedActiveItems.filter(item => item.hasUpdates);
     if (itemsWithUpdates.length > 0 && lastUpdateTime > 0) {
       setNotification(`${itemsWithUpdates.length} prescription(s) updated by doctor`);
       setTimeout(() => setNotification(null), 5000);
     }
     
-    setQueueItems(enrichedItems);
+    setQueueItems(enrichedActiveItems);
+    setPreparedItems(enrichedPreparedItems);
     setIsLoading(false);
   }, [lastUpdateTime]);
 
@@ -173,6 +193,20 @@ export default function PharmacyPage() {
     }
   };
 
+  // Handle reopen - bring prepared item back to active queue
+  const handleReopen = (itemId: string) => {
+    pharmacyQueueDb.update(itemId, { status: 'pending' });
+    loadQueue();
+    
+    // Update selected item if it's the one being reopened
+    if (selectedItem?.id === itemId) {
+      const updated = preparedItems.find(q => q.id === itemId);
+      if (updated) {
+        setSelectedItem({ ...updated, status: 'pending' });
+      }
+    }
+  };
+
   // Handle stop prescription
   const handleStop = (itemId: string, reason: string) => {
     pharmacyQueueDb.stop(itemId, reason);
@@ -204,6 +238,10 @@ export default function PharmacyPage() {
   // Count stats
   const pendingCount = queueItems.filter(q => q.status === 'pending').length;
   const preparingCount = queueItems.filter(q => q.status === 'preparing').length;
+  const preparedCount = preparedItems.length;
+
+  // Get current display items based on active tab
+  const displayItems = activeTab === 'active' ? queueItems : preparedItems;
 
   if (isLoading && queueItems.length === 0) {
     return (
@@ -263,8 +301,8 @@ export default function PharmacyPage() {
               <div className="text-2xl font-bold text-blue-600">{preparingCount}</div>
             </Card>
             <Card className="p-4">
-              <div className="text-sm text-gray-500">Total Active</div>
-              <div className="text-2xl font-bold text-gray-600">{queueItems.length}</div>
+              <div className="text-sm text-gray-500">Prepared</div>
+              <div className="text-2xl font-bold text-green-600">{preparedCount}</div>
             </Card>
             <Card className="p-4">
               <div className="text-sm text-gray-500">With Updates</div>
@@ -274,291 +312,332 @@ export default function PharmacyPage() {
             </Card>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Queue List */}
-            <Card className="overflow-hidden">
-              <div className="p-4 border-b border-gray-200 bg-gray-50">
-                <h2 className="text-lg font-semibold text-gray-900">Prescription Queue</h2>
-                <p className="text-sm text-gray-500">Sorted by priority and time</p>
-              </div>
-              
-              {queueItems.length === 0 ? (
-                <div className="p-8 text-center text-gray-500">
-                  <svg className="w-12 h-12 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                  </svg>
-                  No prescriptions in queue
+          <div className="flex gap-6">
+            {/* Queue List - 25% width */}
+            <div className="w-1/4 min-w-[280px]">
+              <Card className="overflow-hidden h-full">
+                {/* Tabs */}
+                <div className="flex border-b border-gray-200">
+                  <button
+                    onClick={() => { setActiveTab('active'); setSelectedItem(null); }}
+                    className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                      activeTab === 'active'
+                        ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50'
+                        : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    Active ({queueItems.length})
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('prepared'); setSelectedItem(null); }}
+                    className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                      activeTab === 'prepared'
+                        ? 'text-green-600 border-b-2 border-green-600 bg-green-50'
+                        : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    Prepared ({preparedCount})
+                  </button>
                 </div>
-              ) : (
-                <div className="divide-y divide-gray-200 max-h-[600px] overflow-y-auto">
-                  {queueItems.map((item) => (
-                    <div
-                      key={item.id}
-                      onClick={() => setSelectedItem(item)}
-                      className={`p-4 cursor-pointer hover:bg-gray-50 transition-colors ${
-                        selectedItem?.id === item.id ? 'bg-blue-50 border-l-4 border-blue-500' : ''
-                      } ${item.hasUpdates ? 'bg-purple-50' : ''}`}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-semibold text-gray-900">
-                              {getPatientName(item.patientId)}
-                            </span>
-                            {item.priority && (
-                              <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-800">
-                                PRIORITY
-                              </span>
-                            )}
-                            {item.hasUpdates && (
-                              <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-800 flex items-center gap-1">
-                                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                                  <path d="M10 2a6 6 0 00-6 6v3.586l-.707.707A1 1 0 004 14h12a1 1 0 00.707-1.707L16 11.586V8a6 6 0 00-6-6zM10 18a3 3 0 01-3-3h6a3 3 0 01-3 3z" />
-                                </svg>
-                                Updated
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-sm text-gray-500 mt-1">
-                            {getPatientRegNumber(item.patientId)} • {getPatientDetails(item.patientId)}
-                          </div>
-                          <div className="text-xs text-gray-400 mt-1">
-                            Added: {new Date(item.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-                            {' • '}
-                            {item.prescriptions?.length || 0} medicine(s)
-                          </div>
-                        </div>
-                        <div className="flex flex-col items-end gap-2">
-                          {getStatusBadge(item.status)}
-                          {item.status === 'pending' && (
-                            <Button
-                              size="sm"
-                              variant="primary"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleStartPreparing(item.id);
-                              }}
-                            >
-                              Start
-                            </Button>
-                          )}
-                          {item.status === 'preparing' && (
-                            <Button
-                              size="sm"
-                              variant="primary"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleMarkPrepared(item.id);
-                              }}
-                            >
-                              Ready
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Card>
-
-            {/* Prescription Details */}
-            <Card className="overflow-hidden">
-              <div className="p-4 border-b border-gray-200 bg-gray-50">
-                <h2 className="text-lg font-semibold text-gray-900">Prescription Details</h2>
-                <p className="text-sm text-gray-500">
-                  {selectedItem ? `${getPatientName(selectedItem.patientId)} - ${getPatientRegNumber(selectedItem.patientId)}` : 'Select a patient to view details'}
-                </p>
-              </div>
-              
-              {!selectedItem ? (
-                <div className="p-8 text-center text-gray-500">
-                  <svg className="w-12 h-12 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                  </svg>
-                  Click on a patient to view their prescription
-                </div>
-              ) : (
-                <div className="p-4">
-                  {/* Patient Info */}
-                  <div className="bg-blue-50 rounded-lg p-4 mb-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <div className="text-xs text-gray-500">Patient Name</div>
-                        <div className="font-semibold text-gray-900">
-                          {getPatientName(selectedItem.patientId)}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-gray-500">Reg. Number</div>
-                        <div className="font-semibold text-gray-900">
-                          {getPatientRegNumber(selectedItem.patientId)}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-gray-500">Mobile</div>
-                        <div className="font-semibold text-gray-900">
-                          {getPatientMobile(selectedItem.patientId)}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-gray-500">Age/Sex</div>
-                        <div className="font-semibold text-gray-900">
-                          {getPatientDetails(selectedItem.patientId)}
-                        </div>
-                      </div>
-                    </div>
+                
+                {displayItems.length === 0 ? (
+                  <div className="p-8 text-center text-gray-500">
+                    <svg className="w-12 h-12 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    </svg>
+                    {activeTab === 'active' ? 'No active prescriptions' : 'No prepared prescriptions'}
                   </div>
-
-                  {/* Visit Details */}
-                  {selectedItem.visit && (
-                    <div className="mb-4">
-                      <h3 className="text-sm font-semibold text-gray-700 mb-2">Visit Information</h3>
-                      <div className="bg-gray-50 rounded-lg p-3 space-y-2">
-                        {selectedItem.visit.chiefComplaint && (
-                          <div>
-                            <span className="text-xs text-gray-500">Chief Complaint:</span>
-                            <div className="text-sm text-gray-900">{selectedItem.visit.chiefComplaint}</div>
-                          </div>
-                        )}
-                        {selectedItem.visit.diagnosis && (
-                          <div>
-                            <span className="text-xs text-gray-500">Diagnosis:</span>
-                            <div className="text-sm text-gray-900">{selectedItem.visit.diagnosis}</div>
-                          </div>
-                        )}
-                        {selectedItem.visit.advice && (
-                          <div>
-                            <span className="text-xs text-gray-500">Advice:</span>
-                            <div className="text-sm text-gray-900">{selectedItem.visit.advice}</div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Medicines */}
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-700 mb-2">
-                      Prescribed Medicines
-                      {selectedItem.hasUpdates && (
-                        <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-800">
-                          Updated by Doctor
-                        </span>
-                      )}
-                    </h3>
-                    {selectedItem.prescriptions && selectedItem.prescriptions.length > 0 ? (
-                      <div className="space-y-3">
-                        {selectedItem.prescriptions.map((prescription, index) => (
-                          <div key={prescription.id} className="bg-white border border-gray-200 rounded-lg p-3">
-                            <div className="flex items-start justify-between">
-                              <div className="flex-1">
-                                <div className="font-semibold text-gray-900">
-                                  {index + 1}. {prescription.medicine}
-                                  {prescription.potency && <span className="font-normal text-gray-600"> {prescription.potency}</span>}
-                                </div>
-                                {prescription.combinationName && (
-                                  <div className="text-xs text-gray-500">
-                                    Combination: {prescription.combinationName}
-                                  </div>
-                                )}
-                                <div className="mt-1 grid grid-cols-2 gap-2 text-sm">
-                                  {prescription.quantity && (
-                                    <div>
-                                      <span className="text-gray-500">Qty:</span>{' '}
-                                      <span className="text-gray-900">{prescription.quantity}</span>
-                                    </div>
-                                  )}
-                                  {prescription.doseForm && (
-                                    <div>
-                                      <span className="text-gray-500">Form:</span>{' '}
-                                      <span className="text-gray-900">{prescription.doseForm}</span>
-                                    </div>
-                                  )}
-                                  {prescription.dosePattern && (
-                                    <div>
-                                      <span className="text-gray-500">Pattern:</span>{' '}
-                                      <span className="text-gray-900">{prescription.dosePattern}</span>
-                                    </div>
-                                  )}
-                                  {prescription.frequency && (
-                                    <div>
-                                      <span className="text-gray-500">Frequency:</span>{' '}
-                                      <span className="text-gray-900">{prescription.frequency}</span>
-                                    </div>
-                                  )}
-                                  {prescription.duration && (
-                                    <div>
-                                      <span className="text-gray-500">Duration:</span>{' '}
-                                      <span className="text-gray-900">{prescription.duration}</span>
-                                    </div>
-                                  )}
-                                  {prescription.bottles && (
-                                    <div>
-                                      <span className="text-gray-500">Bottles:</span>{' '}
-                                      <span className="text-gray-900">{prescription.bottles}</span>
-                                    </div>
-                                  )}
-                                </div>
-                                {prescription.instructions && (
-                                  <div className="mt-2 text-xs text-gray-600 bg-gray-50 rounded p-2">
-                                    <span className="font-medium">Instructions:</span> {prescription.instructions}
-                                  </div>
-                                )}
-                              </div>
+                ) : (
+                  <div className="divide-y divide-gray-200 max-h-[600px] overflow-y-auto">
+                    {displayItems.map((item) => (
+                      <div
+                        key={item.id}
+                        onClick={() => setSelectedItem(item)}
+                        className={`p-3 cursor-pointer hover:bg-gray-50 transition-colors ${
+                          selectedItem?.id === item.id ? 'bg-blue-50 border-l-4 border-blue-500' : ''
+                        } ${item.hasUpdates ? 'bg-purple-50' : ''}`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1 flex-wrap">
+                              <span className="font-semibold text-gray-900 text-sm truncate">
+                                {getPatientName(item.patientId)}
+                              </span>
+                              {item.priority && (
+                                <span className="px-1.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-800">
+                                  PRIORITY
+                                </span>
+                              )}
+                              {item.hasUpdates && (
+                                <span className="px-1.5 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-800">
+                                  Updated
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xs text-gray-500 mt-0.5 truncate">
+                              {getPatientRegNumber(item.patientId)}
+                            </div>
+                            <div className="text-xs text-gray-400 mt-0.5">
+                              {item.prescriptions?.length || 0} medicine(s)
                             </div>
                           </div>
-                        ))}
+                          <div className="flex flex-col items-end gap-1 ml-2">
+                            {getStatusBadge(item.status)}
+                            {activeTab === 'active' && item.status === 'pending' && (
+                              <Button
+                                size="sm"
+                                variant="primary"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleStartPreparing(item.id);
+                                }}
+                                className="text-xs px-2 py-1"
+                              >
+                                Start
+                              </Button>
+                            )}
+                            {activeTab === 'active' && item.status === 'preparing' && (
+                              <Button
+                                size="sm"
+                                variant="primary"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleMarkPrepared(item.id);
+                                }}
+                                className="text-xs px-2 py-1"
+                              >
+                                Ready
+                              </Button>
+                            )}
+                            {activeTab === 'prepared' && (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleReopen(item.id);
+                                }}
+                                className="text-xs px-2 py-1"
+                              >
+                                Reopen
+                              </Button>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                    ) : (
-                      <div className="text-sm text-gray-500 text-center py-4">
-                        No medicines in this prescription
-                      </div>
-                    )}
+                    ))}
                   </div>
+                )}
+              </Card>
+            </div>
 
-                  {/* Action Buttons */}
-                  <div className="mt-6 flex gap-2">
-                    {selectedItem.status === 'pending' && (
-                      <Button
-                        variant="primary"
-                        className="flex-1"
-                        onClick={() => handleStartPreparing(selectedItem.id)}
-                      >
-                        Start Preparing Medicines
-                      </Button>
-                    )}
-                    {selectedItem.status === 'preparing' && (
-                      <Button
-                        variant="primary"
-                        className="flex-1"
-                        onClick={() => handleMarkPrepared(selectedItem.id)}
-                      >
-                        Mark as Prepared
-                      </Button>
-                    )}
-                    {selectedItem.status === 'prepared' && (
-                      <div className="flex-1 text-center py-2 bg-green-100 text-green-800 rounded-lg font-medium">
-                        Medicines Prepared
+            {/* Prescription Details - 75% width */}
+            <div className="w-3/4 flex-1">
+              <Card className="overflow-hidden h-full">
+                <div className="p-4 border-b border-gray-200 bg-gray-50">
+                  <h2 className="text-lg font-semibold text-gray-900">Prescription Details</h2>
+                  <p className="text-sm text-gray-500">
+                    {selectedItem ? `${getPatientName(selectedItem.patientId)} - ${getPatientRegNumber(selectedItem.patientId)}` : 'Select a patient to view details'}
+                  </p>
+                </div>
+                
+                {!selectedItem ? (
+                  <div className="p-8 text-center text-gray-500">
+                    <svg className="w-12 h-12 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                    </svg>
+                    Click on a patient to view their prescription
+                  </div>
+                ) : (
+                  <div className="p-4">
+                    {/* Patient Info */}
+                    <div className="bg-blue-50 rounded-lg p-4 mb-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <div className="text-xs text-gray-500">Patient Name</div>
+                          <div className="font-semibold text-gray-900">
+                            {getPatientName(selectedItem.patientId)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-gray-500">Reg. Number</div>
+                          <div className="font-semibold text-gray-900">
+                            {getPatientRegNumber(selectedItem.patientId)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-gray-500">Mobile</div>
+                          <div className="font-semibold text-gray-900">
+                            {getPatientMobile(selectedItem.patientId)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-gray-500">Age/Sex</div>
+                          <div className="font-semibold text-gray-900">
+                            {getPatientDetails(selectedItem.patientId)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Visit Details */}
+                    {selectedItem.visit && (
+                      <div className="mb-4">
+                        <h3 className="text-sm font-semibold text-gray-700 mb-2">Visit Information</h3>
+                        <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+                          {selectedItem.visit.chiefComplaint && (
+                            <div>
+                              <span className="text-xs text-gray-500">Chief Complaint:</span>
+                              <div className="text-sm text-gray-900">{selectedItem.visit.chiefComplaint}</div>
+                            </div>
+                          )}
+                          {selectedItem.visit.diagnosis && (
+                            <div>
+                              <span className="text-xs text-gray-500">Diagnosis:</span>
+                              <div className="text-sm text-gray-900">{selectedItem.visit.diagnosis}</div>
+                            </div>
+                          )}
+                          {selectedItem.visit.advice && (
+                            <div>
+                              <span className="text-xs text-gray-500">Advice:</span>
+                              <div className="text-sm text-gray-900">{selectedItem.visit.advice}</div>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
-                    {(selectedItem.status === 'pending' || selectedItem.status === 'preparing') && (
-                      <Button
-                        variant="danger"
-                        onClick={() => {
-                          const reason = prompt('Enter reason for stopping:');
-                          if (reason) {
-                            handleStop(selectedItem.id, reason);
-                          }
-                        }}
-                      >
-                        Stop
-                      </Button>
-                    )}
+
+                    {/* Medicines */}
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-700 mb-2">
+                        Prescribed Medicines
+                        {selectedItem.hasUpdates && (
+                          <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-800">
+                            Updated by Doctor
+                          </span>
+                        )}
+                      </h3>
+                      {selectedItem.prescriptions && selectedItem.prescriptions.length > 0 ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {selectedItem.prescriptions.map((prescription, index) => (
+                            <div key={prescription.id} className="bg-white border border-gray-200 rounded-lg p-3">
+                              <div className="flex items-start justify-between">
+                                <div className="flex-1">
+                                  <div className="font-semibold text-gray-900">
+                                    {index + 1}. {prescription.medicine}
+                                    {prescription.potency && <span className="font-normal text-gray-600"> {prescription.potency}</span>}
+                                  </div>
+                                  {prescription.combinationName && (
+                                    <div className="text-xs text-gray-500">
+                                      Combination: {prescription.combinationName}
+                                    </div>
+                                  )}
+                                  <div className="mt-1 grid grid-cols-2 gap-2 text-sm">
+                                    {prescription.quantity && (
+                                      <div>
+                                        <span className="text-gray-500">Qty:</span>{' '}
+                                        <span className="text-gray-900">{prescription.quantity}</span>
+                                      </div>
+                                    )}
+                                    {prescription.doseForm && (
+                                      <div>
+                                        <span className="text-gray-500">Form:</span>{' '}
+                                        <span className="text-gray-900">{prescription.doseForm}</span>
+                                      </div>
+                                    )}
+                                    {prescription.dosePattern && (
+                                      <div>
+                                        <span className="text-gray-500">Pattern:</span>{' '}
+                                        <span className="text-gray-900">{prescription.dosePattern}</span>
+                                      </div>
+                                    )}
+                                    {prescription.frequency && (
+                                      <div>
+                                        <span className="text-gray-500">Frequency:</span>{' '}
+                                        <span className="text-gray-900">{prescription.frequency}</span>
+                                      </div>
+                                    )}
+                                    {prescription.duration && (
+                                      <div>
+                                        <span className="text-gray-500">Duration:</span>{' '}
+                                        <span className="text-gray-900">{prescription.duration}</span>
+                                      </div>
+                                    )}
+                                    {prescription.bottles && (
+                                      <div>
+                                        <span className="text-gray-500">Bottles:</span>{' '}
+                                        <span className="text-gray-900">{prescription.bottles}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                  {prescription.instructions && (
+                                    <div className="mt-2 text-xs text-gray-600 bg-gray-50 rounded p-2">
+                                      <span className="font-medium">Instructions:</span> {prescription.instructions}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-sm text-gray-500 text-center py-4">
+                          No medicines in this prescription
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="mt-6 flex gap-2">
+                      {selectedItem.status === 'pending' && (
+                        <Button
+                          variant="primary"
+                          className="flex-1"
+                          onClick={() => handleStartPreparing(selectedItem.id)}
+                        >
+                          Start Preparing Medicines
+                        </Button>
+                      )}
+                      {selectedItem.status === 'preparing' && (
+                        <Button
+                          variant="primary"
+                          className="flex-1"
+                          onClick={() => handleMarkPrepared(selectedItem.id)}
+                        >
+                          Mark as Prepared
+                        </Button>
+                      )}
+                      {selectedItem.status === 'prepared' && (
+                        <>
+                          <div className="flex-1 text-center py-2 bg-green-100 text-green-800 rounded-lg font-medium">
+                            Medicines Prepared
+                          </div>
+                          <Button
+                            variant="secondary"
+                            onClick={() => handleReopen(selectedItem.id)}
+                          >
+                            Reopen
+                          </Button>
+                        </>
+                      )}
+                      {(selectedItem.status === 'pending' || selectedItem.status === 'preparing') && (
+                        <Button
+                          variant="danger"
+                          onClick={() => {
+                            const reason = prompt('Enter reason for stopping:');
+                            if (reason) {
+                              handleStop(selectedItem.id, reason);
+                            }
+                          }}
+                        >
+                          Stop
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
-            </Card>
+                )}
+              </Card>
+            </div>
           </div>
         </div>
       </div>
