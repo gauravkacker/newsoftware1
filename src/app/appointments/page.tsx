@@ -83,6 +83,8 @@ export default function AppointmentsPage() {
         return "warning";
       case "in-progress":
         return "warning";
+      case "medicines-prepared":
+        return "success";
       case "completed":
         return "success";
       case "cancelled":
@@ -244,6 +246,7 @@ export default function AppointmentsPage() {
                 <option value="confirmed">Confirmed</option>
                 <option value="checked-in">Checked In</option>
                 <option value="in-progress">In Progress</option>
+                <option value="medicines-prepared">Medicines Prepared</option>
                 <option value="completed">Completed</option>
                 <option value="cancelled">Cancelled</option>
                 <option value="no-show">No Show</option>

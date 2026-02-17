@@ -85,6 +85,7 @@ export interface PharmacyQueueItem {
   id: string;
   visitId: string;
   patientId: string;
+  appointmentId?: string;
   prescriptionIds: string[];
   priority: boolean;
   status: string;

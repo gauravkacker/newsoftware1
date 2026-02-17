@@ -30,7 +30,7 @@ export interface FeeType {
 export type VisitStatus = 'completed' | 'cancelled' | 'no-show';
 
 // Appointment Status
-export type AppointmentStatus = 'scheduled' | 'confirmed' | 'checked-in' | 'in-progress' | 'completed' | 'cancelled' | 'no-show';
+export type AppointmentStatus = 'scheduled' | 'confirmed' | 'checked-in' | 'in-progress' | 'completed' | 'medicines-prepared' | 'cancelled' | 'no-show';
 
 // Appointment Type
 export type AppointmentType = 'new' | 'follow-up' | 'consultation' | 'emergency';

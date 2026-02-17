@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { pharmacyQueueDb, doctorPrescriptionDb, doctorVisitDb } from '@/lib/db/doctor-panel';
-import { patientDb } from '@/lib/db/database';
+import { patientDb, appointmentDb } from '@/lib/db/database';
 import type { PharmacyQueueItem, DoctorPrescription, DoctorVisit } from '@/lib/db/schema';
 
 // Types
@@ -184,7 +184,27 @@ export default function PharmacyPage() {
 
   // Handle status change to prepared
   const handleMarkPrepared = (itemId: string) => {
+    // Get the pharmacy queue item to find the patient
+    const pharmacyItem = pharmacyQueueDb.getById(itemId);
+    
     pharmacyQueueDb.markPrepared(itemId, 'pharmacy');
+    
+    // Update appointment status to medicines-prepared
+    if (pharmacyItem) {
+      const patientAppointments = appointmentDb.getByPatient(pharmacyItem.patientId);
+      // Find today's appointment that is in 'completed' status (after doctor visit)
+      const today = new Date().toISOString().split('T')[0];
+      const relevantAppointment = patientAppointments.find((apt) => {
+        const typedApt = apt as { appointmentDate: Date; status: string };
+        const aptDate = new Date(typedApt.appointmentDate).toISOString().split('T')[0];
+        return aptDate === today && (typedApt.status === 'completed' || typedApt.status === 'in-progress');
+      });
+      
+      if (relevantAppointment) {
+        appointmentDb.update((relevantAppointment as { id: string }).id, { status: 'medicines-prepared' });
+      }
+    }
+    
     loadQueue();
     
     // Clear selection if the prepared item was selected
@@ -195,7 +215,26 @@ export default function PharmacyPage() {
 
   // Handle reopen - bring prepared item back to active queue
   const handleReopen = (itemId: string) => {
+    // Get the pharmacy queue item to find the patient
+    const pharmacyItem = pharmacyQueueDb.getById(itemId);
+    
     pharmacyQueueDb.update(itemId, { status: 'pending' });
+    
+    // Update appointment status back to completed
+    if (pharmacyItem) {
+      const patientAppointments = appointmentDb.getByPatient(pharmacyItem.patientId);
+      const today = new Date().toISOString().split('T')[0];
+      const relevantAppointment = patientAppointments.find((apt) => {
+        const typedApt = apt as { appointmentDate: Date; status: string };
+        const aptDate = new Date(typedApt.appointmentDate).toISOString().split('T')[0];
+        return aptDate === today && typedApt.status === 'medicines-prepared';
+      });
+      
+      if (relevantAppointment) {
+        appointmentDb.update((relevantAppointment as { id: string }).id, { status: 'completed' });
+      }
+    }
+    
     loadQueue();
     
     // Update selected item if it's the one being reopened
