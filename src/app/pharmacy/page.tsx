@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { pharmacyQueueDb, doctorPrescriptionDb, doctorVisitDb } from '@/lib/db/doctor-panel';
-import { patientDb, appointmentDb } from '@/lib/db/database';
+import { patientDb, appointmentDb, billingQueueDb } from '@/lib/db/database';
 import type { PharmacyQueueItem, DoctorPrescription, DoctorVisit } from '@/lib/db/schema';
 
 // Types
@@ -189,7 +189,7 @@ export default function PharmacyPage() {
     
     pharmacyQueueDb.markPrepared(itemId, 'pharmacy');
     
-    // Update appointment status to medicines-prepared
+    // Update appointment status to medicines-prepared and send to billing
     if (pharmacyItem) {
       const patientAppointments = appointmentDb.getByPatient(pharmacyItem.patientId);
       // Find today's appointment that is in 'completed' status (after doctor visit)
@@ -203,6 +203,32 @@ export default function PharmacyPage() {
       if (relevantAppointment) {
         appointmentDb.update((relevantAppointment as { id: string }).id, { status: 'medicines-prepared' });
       }
+      
+      // Get patient and visit info for billing
+      const patient = patientDb.getById(pharmacyItem.patientId) as PatientInfo | undefined;
+      const visit = doctorVisitDb.getById(pharmacyItem.visitId);
+      
+      // Determine fee amount based on visit type
+      let feeAmount = 300; // Default follow-up fee
+      let feeType = 'Follow Up';
+      
+      if (visit && visit.visitNumber === 1) {
+        feeAmount = 500;
+        feeType = 'New Patient';
+      }
+      
+      // Create billing queue item
+      billingQueueDb.create({
+        visitId: pharmacyItem.visitId,
+        patientId: pharmacyItem.patientId,
+        appointmentId: pharmacyItem.appointmentId,
+        prescriptionIds: pharmacyItem.prescriptionIds || [],
+        status: 'pending',
+        feeAmount,
+        feeType,
+        netAmount: feeAmount,
+        paymentStatus: 'pending'
+      });
     }
     
     loadQueue();

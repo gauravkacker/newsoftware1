@@ -18,6 +18,18 @@ A complete Homeopathic Patient Management System built with Next.js 16, featurin
 - [x] Prescription settings page for configuring default values (Potency, Quantity, Dose Form, Pattern, Frequency, Duration)
 - [x] Separate smart parsing input field above prescription table (February 2026)
 - [x] Fixed combination medicine autocomplete - initialized database stores and added seed data for 20 common homeopathic combinations (Bioplasgen No. 1-12, Five Phos, BC-1 to BC-6)
+- [x] **NEW: Billing Module** (February 2026)
+  - Created billing database schema (BillingQueueItem, BillingReceipt)
+  - Created billing page with patient queue list
+  - Implemented fee details popup with edit functionality
+  - Implemented prescription view popup with WhatsApp, Print, PDF options
+  - Added patient fee history tab
+  - Added fee receipt print functionality
+  - Implemented complete button to end patient flow
+  - Integrated with pharmacy queue (prepared status → billing)
+  - Integrated with doctor panel (bypass pharmacy → billing)
+  - Added 'billed' status to appointments
+  - Added 'outline' and 'success' button variants
 
 ## Current Structure
 
@@ -29,6 +41,8 @@ A complete Homeopathic Patient Management System built with Next.js 16, featurin
 | `src/app/queue/` | Queue management | ✅ Active |
 | `src/app/settings/` | System settings | ✅ Active |
 | `src/app/admin/` | Admin panel | ✅ Active |
+| `src/app/billing/` | Billing module | ✅ Active |
+| `src/app/pharmacy/` | Pharmacy queue | ✅ Active |
 | `src/lib/db/` | Database schema and utilities | ✅ Active |
 | `src/components/ui/` | Reusable UI components | ✅ Active |
 | `src/components/layout/` | Layout components | ✅ Active |
@@ -60,6 +74,8 @@ bun typecheck  # TypeScript checking
 - **Patient Management**: Full CRUD operations, visit history, tags, import
 - **Appointments**: Schedule and manage patient visits
 - **Queue System**: Organize patient flow with token management
+- **Pharmacy**: Medicine preparation queue with status tracking
+- **Billing**: Fee management, receipts, and payment tracking
 - **Settings**: Configure fees, registration, time slots, smart parsing
 - **Admin**: User management, activity logging
 
@@ -79,6 +95,8 @@ bun typecheck  # TypeScript checking
 | `/appointments/new` | New appointment |
 | `/queue` | Patient queue |
 | `/queue/doctor` | Doctor queue view |
+| `/pharmacy` | Pharmacy queue |
+| `/billing` | Billing and receipts |
 | `/settings` | System settings |
 | `/settings/fees` | Fee configuration |
 | `/settings/slots` | Time slot configuration |
@@ -100,3 +118,4 @@ bun typecheck  # TypeScript checking
 | February 2026 | Cloned from newsoftware1.git repository, ready for continued development |
 | February 2026 | Enhanced pharmacy module: 25/75 layout, Prepared tab, Reopen functionality |
 | February 2026 | Added medicines-prepared status for appointments, linked pharmacy to appointments |
+| February 2026 | **Added Billing Module**: Complete billing workflow with fee editing, receipts, fee history, WhatsApp/Print/PDF options, and integration with pharmacy and doctor panel |
