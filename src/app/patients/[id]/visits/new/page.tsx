@@ -143,7 +143,7 @@ export default function NewVisitPage() {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <Card className="p-8 text-center">
           <h2 className="text-xl font-medium text-gray-900 mb-2">Patient Not Found</h2>
-          <p className="text-gray-500 mb-4">The patient record doesn&apos;t exist.</p>
+          <p className="text-gray-500 mb-4">The patient record doesn't exist.</p>
           <Button onClick={() => router.push("/patients")} variant="primary">
             Back to Patients
           </Button>
