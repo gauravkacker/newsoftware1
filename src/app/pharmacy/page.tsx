@@ -6,9 +6,8 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { pharmacyQueueDb, doctorPrescriptionDb, doctorVisitDb } from '@/lib/db/doctor-panel';
-import { patientDb, appointmentDb, feeHistoryDb, billingQueueDb } from '@/lib/db/database';
+import { patientDb, appointmentDb, billingQueueDb } from '@/lib/db/database';
 import type { PharmacyQueueItem, DoctorPrescription, DoctorVisit } from '@/lib/db/schema';
-import type { Appointment, FeeHistoryEntry } from '@/types';
 
 // Types
 interface PatientInfo {
@@ -26,12 +25,6 @@ interface PharmacyQueueItemWithDetails extends PharmacyQueueItem {
   visit?: DoctorVisit;
   prescriptions?: DoctorPrescription[];
   hasUpdates?: boolean; // Track if doctor made changes
-  feeInfo?: {
-    amount: number;
-    feeType: string;
-    status: string;
-    paymentMethod?: string;
-  };
 }
 
 type TabType = 'active' | 'prepared';
@@ -104,46 +97,12 @@ export default function PharmacyPage() {
         // Update the ref
         previousPrescriptionIds.current.set(item.id, currentPrescriptionIds);
         
-        // Get fee info from appointment or fee history
-        let feeInfo: { amount: number; feeType: string; status: string; paymentMethod?: string } | undefined;
-        
-        // First check today's appointment for this patient
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const allAppointments = appointmentDb.getAll() as Appointment[];
-        const todayAppointment = allAppointments.find((apt: Appointment) => {
-          const aptDate = new Date(apt.appointmentDate);
-          aptDate.setHours(0, 0, 0, 0);
-          return apt.patientId === item.patientId && aptDate.getTime() === today.getTime();
-        });
-        
-        if (todayAppointment) {
-          feeInfo = {
-            amount: (todayAppointment.feeAmount as number) || 0,
-            feeType: (todayAppointment.feeType as string) || 'consultation',
-            status: (todayAppointment.feeStatus as string) || 'pending',
-            paymentMethod: todayAppointment.paymentMode,
-          };
-        } else {
-          // Check fee history for this patient
-          const lastFee = feeHistoryDb.getLastByPatient(item.patientId) as FeeHistoryEntry | null;
-          if (lastFee) {
-            feeInfo = {
-              amount: lastFee.amount,
-              feeType: lastFee.feeType,
-              status: lastFee.paymentStatus,
-              paymentMethod: lastFee.paymentMethod,
-            };
-          }
-        }
-        
         return {
           ...item,
           patient,
           visit: visit || undefined,
           prescriptions,
           hasUpdates,
-          feeInfo,
         };
       });
     };
@@ -232,64 +191,61 @@ export default function PharmacyPage() {
     
     // Update appointment status to medicines-prepared and send to billing
     if (pharmacyItem) {
-      let relevantAppointment = null;
-      
-      // First try to get appointment by ID if available
-      if (pharmacyItem.appointmentId) {
-        relevantAppointment = appointmentDb.getById(pharmacyItem.appointmentId);
-      }
-      
-      // If no appointmentId, try to find today's appointment for this patient
-      if (!relevantAppointment) {
-        const patientAppointments = appointmentDb.getByPatient(pharmacyItem.patientId);
-        // Find today's appointment that is in 'completed' status (after doctor visit)
-        const today = new Date().toISOString().split('T')[0];
-        relevantAppointment = patientAppointments.find((apt) => {
-          const typedApt = apt as { appointmentDate: Date; status: string };
-          const aptDate = new Date(typedApt.appointmentDate).toISOString().split('T')[0];
-          return aptDate === today && (typedApt.status === 'completed' || typedApt.status === 'in-progress');
-        });
-      }
+      const patientAppointments = appointmentDb.getByPatient(pharmacyItem.patientId);
+      // Find today's appointment that is in 'completed' status (after doctor visit)
+      const today = new Date().toISOString().split('T')[0];
+      const relevantAppointment = patientAppointments.find((apt) => {
+        const typedApt = apt as { appointmentDate: Date; status: string };
+        const aptDate = new Date(typedApt.appointmentDate).toISOString().split('T')[0];
+        return aptDate === today && (typedApt.status === 'completed' || typedApt.status === 'in-progress');
+      });
       
       if (relevantAppointment) {
         appointmentDb.update((relevantAppointment as { id: string }).id, { status: 'medicines-prepared' });
       }
       
-      // Get patient and visit info for billing
-      const patient = patientDb.getById(pharmacyItem.patientId) as PatientInfo | undefined;
-      const visit = doctorVisitDb.getById(pharmacyItem.visitId);
+      // Check if billing item already exists for this visit
+      const existingBilling = (billingQueueDb.getAll() as any[]).find(
+        (b) => b.visitId === pharmacyItem.visitId
+      );
       
-      // Get fee from appointment (the actual fee selected during booking)
-      let feeAmount = 300; // Default follow-up fee
-      let feeType = 'Follow Up';
-      
-      // Try to get fee from the appointment first
-      if (relevantAppointment) {
-        const apt = relevantAppointment as { feeAmount?: number; feeType?: string; feeStatus?: string };
-        if (apt.feeAmount !== undefined && apt.feeAmount !== null) {
-          feeAmount = apt.feeAmount;
+      if (!existingBilling) {
+        // Get patient and visit info for billing
+        const patient = patientDb.getById(pharmacyItem.patientId) as PatientInfo | undefined;
+        const visit = doctorVisitDb.getById(pharmacyItem.visitId);
+        
+        // Get fee from appointment (the actual fee selected during booking)
+        let feeAmount = 300; // Default follow-up fee
+        let feeType = 'Follow Up';
+        
+        // Try to get fee from the appointment first
+        if (relevantAppointment) {
+          const apt = relevantAppointment as { feeAmount?: number; feeType?: string; feeStatus?: string };
+          if (apt.feeAmount !== undefined && apt.feeAmount !== null) {
+            feeAmount = apt.feeAmount;
+          }
+          if (apt.feeType) {
+            feeType = apt.feeType;
+          }
+        } else if (visit && visit.visitNumber === 1) {
+          // Fallback to visit type based fee only if no appointment fee
+          feeAmount = 500;
+          feeType = 'New Patient';
         }
-        if (apt.feeType) {
-          feeType = apt.feeType;
-        }
-      } else if (visit && visit.visitNumber === 1) {
-        // Fallback to visit type based fee only if no appointment fee
-        feeAmount = 500;
-        feeType = 'New Patient';
+        
+        // Create billing queue item
+        billingQueueDb.create({
+          visitId: pharmacyItem.visitId,
+          patientId: pharmacyItem.patientId,
+          appointmentId: pharmacyItem.appointmentId,
+          prescriptionIds: pharmacyItem.prescriptionIds || [],
+          status: 'pending',
+          feeAmount,
+          feeType,
+          netAmount: feeAmount,
+          paymentStatus: 'pending'
+        });
       }
-      
-      // Create billing queue item
-      billingQueueDb.create({
-        visitId: pharmacyItem.visitId,
-        patientId: pharmacyItem.patientId,
-        appointmentId: pharmacyItem.appointmentId || (relevantAppointment as { id: string })?.id,
-        prescriptionIds: pharmacyItem.prescriptionIds || [],
-        status: 'pending',
-        feeAmount,
-        feeType,
-        netAmount: feeAmount,
-        paymentStatus: 'pending'
-      });
     }
     
     loadQueue();
@@ -604,30 +560,6 @@ export default function PharmacyPage() {
                           </div>
                         </div>
                       </div>
-                      
-                      {/* Fee Info */}
-                      {selectedItem.feeInfo && (
-                        <div className="mt-3 pt-3 border-t border-blue-200">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <div className="text-xs text-gray-500">Fee</div>
-                              <div className="font-semibold text-gray-900">
-                                ₹{selectedItem.feeInfo.amount} ({selectedItem.feeInfo.feeType})
-                              </div>
-                            </div>
-                            <div className={`px-2 py-1 rounded-full text-xs font-medium ${
-                              selectedItem.feeInfo.status === 'paid' 
-                                ? 'bg-green-100 text-green-800' 
-                                : selectedItem.feeInfo.status === 'exempt'
-                                ? 'bg-purple-100 text-purple-800'
-                                : 'bg-amber-100 text-amber-800'
-                            }`}>
-                              {selectedItem.feeInfo.status === 'paid' ? 'Paid' : 
-                               selectedItem.feeInfo.status === 'exempt' ? 'Exempt' : 'Due'}
-                            </div>
-                          </div>
-                        </div>
-                      )}
                     </div>
 
                     {/* Visit Details */}

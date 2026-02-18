@@ -142,9 +142,9 @@ export default function BillingPage() {
     const preparedPharmacyItems = allPharmacyItems.filter(item => item.status === 'prepared');
     
     preparedPharmacyItems.forEach((pharmacyItem: PharmacyQueueItem) => {
-      // Check if already in billing queue
+      // Check if already in billing queue (any status - including completed)
       const existingBilling = (billingQueueDb.getAll() as BillingQueueItem[]).find(
-        (b) => b.visitId === pharmacyItem.visitId && b.status !== 'completed'
+        (b) => b.visitId === pharmacyItem.visitId
       );
       
       if (!existingBilling) {
