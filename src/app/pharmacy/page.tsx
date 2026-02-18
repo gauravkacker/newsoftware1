@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { pharmacyQueueDb, doctorPrescriptionDb, doctorVisitDb } from '@/lib/db/doctor-panel';
-import { patientDb, appointmentDb, feeHistoryDb } from '@/lib/db/database';
+import { patientDb, appointmentDb, feeHistoryDb, billingQueueDb } from '@/lib/db/database';
 import type { PharmacyQueueItem, DoctorPrescription, DoctorVisit } from '@/lib/db/schema';
 import type { Appointment, FeeHistoryEntry } from '@/types';
 
@@ -225,7 +225,63 @@ export default function PharmacyPage() {
 
   // Handle status change to prepared
   const handleMarkPrepared = (itemId: string) => {
+    // Get the pharmacy queue item to find the patient
+    const pharmacyItem = pharmacyQueueDb.getById(itemId);
+    
     pharmacyQueueDb.markPrepared(itemId, 'pharmacy');
+    
+    // Update appointment status to medicines-prepared and send to billing
+    if (pharmacyItem) {
+      const patientAppointments = appointmentDb.getByPatient(pharmacyItem.patientId);
+      // Find today's appointment that is in 'completed' status (after doctor visit)
+      const today = new Date().toISOString().split('T')[0];
+      const relevantAppointment = patientAppointments.find((apt) => {
+        const typedApt = apt as { appointmentDate: Date; status: string };
+        const aptDate = new Date(typedApt.appointmentDate).toISOString().split('T')[0];
+        return aptDate === today && (typedApt.status === 'completed' || typedApt.status === 'in-progress');
+      });
+      
+      if (relevantAppointment) {
+        appointmentDb.update((relevantAppointment as { id: string }).id, { status: 'medicines-prepared' });
+      }
+      
+      // Get patient and visit info for billing
+      const patient = patientDb.getById(pharmacyItem.patientId) as PatientInfo | undefined;
+      const visit = doctorVisitDb.getById(pharmacyItem.visitId);
+      
+      // Get fee from appointment (the actual fee selected during booking)
+      let feeAmount = 300; // Default follow-up fee
+      let feeType = 'Follow Up';
+      
+      // Try to get fee from the appointment first
+      if (relevantAppointment) {
+        const apt = relevantAppointment as { feeAmount?: number; feeType?: string; feeStatus?: string };
+        if (apt.feeAmount !== undefined && apt.feeAmount !== null) {
+          feeAmount = apt.feeAmount;
+        }
+        if (apt.feeType) {
+          feeType = apt.feeType;
+        }
+      } else if (visit && visit.visitNumber === 1) {
+        // Fallback to visit type based fee only if no appointment fee
+        feeAmount = 500;
+        feeType = 'New Patient';
+      }
+      
+      // Create billing queue item
+      billingQueueDb.create({
+        visitId: pharmacyItem.visitId,
+        patientId: pharmacyItem.patientId,
+        appointmentId: pharmacyItem.appointmentId,
+        prescriptionIds: pharmacyItem.prescriptionIds || [],
+        status: 'pending',
+        feeAmount,
+        feeType,
+        netAmount: feeAmount,
+        paymentStatus: 'pending'
+      });
+    }
+    
     loadQueue();
     
     // Clear selection if the prepared item was selected
@@ -236,7 +292,26 @@ export default function PharmacyPage() {
 
   // Handle reopen - bring prepared item back to active queue
   const handleReopen = (itemId: string) => {
+    // Get the pharmacy queue item to find the patient
+    const pharmacyItem = pharmacyQueueDb.getById(itemId);
+    
     pharmacyQueueDb.update(itemId, { status: 'pending' });
+    
+    // Update appointment status back to completed
+    if (pharmacyItem) {
+      const patientAppointments = appointmentDb.getByPatient(pharmacyItem.patientId);
+      const today = new Date().toISOString().split('T')[0];
+      const relevantAppointment = patientAppointments.find((apt) => {
+        const typedApt = apt as { appointmentDate: Date; status: string };
+        const aptDate = new Date(typedApt.appointmentDate).toISOString().split('T')[0];
+        return aptDate === today && typedApt.status === 'medicines-prepared';
+      });
+      
+      if (relevantAppointment) {
+        appointmentDb.update((relevantAppointment as { id: string }).id, { status: 'completed' });
+      }
+    }
+    
     loadQueue();
     
     // Update selected item if it's the one being reopened

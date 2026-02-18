@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { patientDb, appointmentDb } from '@/lib/db/database';
+import { patientDb, appointmentDb, billingQueueDb } from '@/lib/db/database';
 import { feeHistoryDb } from '@/lib/db/database';
 import { doctorVisitDb, doctorPrescriptionDb, pharmacyQueueDb } from '@/lib/db/doctor-panel';
 import { db } from '@/lib/db/database';
@@ -703,8 +703,9 @@ export default function DoctorPanelPage() {
     const appointments = appointmentDb.getByPatient(patientData.id) as Appointment[];
     const todayAppointment = appointments.find((apt: Appointment) => {
       const aptDate = new Date(apt.appointmentDate);
+      // Include scheduled appointments for fee display (new patients may have scheduled status)
       return aptDate >= today && aptDate <= todayEnd && 
-             (apt.status === 'checked-in' || apt.status === 'in-progress');
+             (apt.status === 'checked-in' || apt.status === 'in-progress' || apt.status === 'scheduled');
     });
     
     if (todayAppointment) {
@@ -741,15 +742,17 @@ export default function DoctorPanelPage() {
         feeType: lastFee.feeType,
         status: 'paid',
       });
-    } else if (todayAppointment && todayAppointment.feeStatus === 'pending') {
-      // If no paid fee history but current appointment has pending/due fee, show that as last fee info
+    } else if (todayAppointment) {
+      // If no paid fee history but current appointment exists, show the appointment fee as last fee info
+      // This handles new patients and shows their fee regardless of status (pending, paid, exempt)
       const aptDate = new Date(todayAppointment.appointmentDate);
+      const feeStatus = (todayAppointment.feeStatus as string) || 'pending';
       setLastFeeInfo({
         date: aptDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
         amount: (todayAppointment.feeAmount as number) || 0,
         daysAgo: 0,
         feeType: (todayAppointment.feeType as string) || 'consultation',
-        status: 'pending',
+        status: feeStatus as 'paid' | 'pending',
       });
     } else {
       setLastFeeInfo(null);
@@ -1754,6 +1757,51 @@ export default function DoctorPanelPage() {
       priority: false,
       status: 'pending',
     });
+    
+    setPharmacySent(true);
+  };
+
+  // Bypass pharmacy and send directly to billing
+  const handleSendToBilling = () => {
+    if (!savedVisitId || !patient) return;
+    
+    // Get fee from current appointment fee (the actual fee selected during booking)
+    let feeAmount = 300; // Default follow-up fee
+    let feeType = 'Follow Up';
+    
+    // Use the current appointment fee if available
+    if (currentAppointmentFee && currentAppointmentFee.feeAmount > 0) {
+      feeAmount = currentAppointmentFee.feeAmount;
+      feeType = currentAppointmentFee.feeType || 'Follow Up';
+    } else if (currentVisit && currentVisit.visitNumber === 1) {
+      // Fallback to visit type based fee only if no appointment fee
+      feeAmount = 500;
+      feeType = 'New Patient';
+    }
+    
+    // Create billing queue item directly
+    billingQueueDb.create({
+      visitId: savedVisitId,
+      patientId: patient.id,
+      appointmentId: currentAppointmentFee?.feeId,
+      prescriptionIds: [],
+      status: 'pending',
+      feeAmount,
+      feeType,
+      netAmount: feeAmount,
+      paymentStatus: 'pending'
+    });
+    
+    // Update appointment status to medicines-prepared (bypassing pharmacy)
+    if (currentAppointmentFee?.feeId) {
+      const appointments = appointmentDb.getAll() as Appointment[];
+      const todayAppt = appointments.find((apt: Appointment) =>
+        apt.feeId === currentAppointmentFee.feeId
+      );
+      if (todayAppt) {
+        appointmentDb.update(todayAppt.id, { status: 'medicines-prepared' });
+      }
+    }
     
     setPharmacySent(true);
   };
@@ -3503,16 +3551,28 @@ Dr. Homeopathic Clinic`);
                 
                 {/* Send to Pharmacy Button - Only show if consultation ended and not yet sent */}
                 {isConsultationEnded && !pharmacySent && (
-                  <button
-                    onClick={handleSendToPharmacy}
-                    className="flex items-center gap-1 px-3 py-2 text-sm bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors"
-                    title="Send to Pharmacy Queue"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                    </svg>
-                    Send to Pharmacy
-                  </button>
+                  <>
+                    <button
+                      onClick={handleSendToPharmacy}
+                      className="flex items-center gap-1 px-3 py-2 text-sm bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors"
+                      title="Send to Pharmacy Queue"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                      </svg>
+                      Send to Pharmacy
+                    </button>
+                    <button
+                      onClick={handleSendToBilling}
+                      className="flex items-center gap-1 px-3 py-2 text-sm bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors"
+                      title="Bypass Pharmacy and Send to Billing"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                      </svg>
+                      Send to Billing
+                    </button>
+                  </>
                 )}
                 
                 {/* Pharmacy Sent Indicator */}

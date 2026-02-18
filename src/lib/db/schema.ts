@@ -85,6 +85,7 @@ export interface PharmacyQueueItem {
   id: string;
   visitId: string;
   patientId: string;
+  appointmentId?: string;
   prescriptionIds: string[];
   priority: boolean;
   status: string;
@@ -143,6 +144,58 @@ export interface SmartParsingTemplate {
   updatedAt: Date;
 }
 
+// Billing Queue Item
+export interface BillingQueueItem {
+  id: string;
+  visitId: string;
+  patientId: string;
+  appointmentId?: string;
+  prescriptionIds: string[];
+  status: 'pending' | 'paid' | 'completed';
+  feeAmount: number;
+  feeType: string;
+  discountPercent?: number;
+  discountAmount?: number;
+  taxAmount?: number;
+  netAmount: number;
+  paymentMethod?: 'cash' | 'card' | 'upi' | 'cheque' | 'insurance' | 'exempt';
+  paymentStatus: 'pending' | 'paid' | 'partial' | 'refunded';
+  receiptNumber?: string;
+  receiptGeneratedAt?: Date;
+  notes?: string;
+  createdBy?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// Billing Receipt
+export interface BillingReceipt {
+  id: string;
+  receiptNumber: string;
+  billingQueueId: string;
+  patientId: string;
+  visitId: string;
+  items: BillingReceiptItem[];
+  subtotal: number;
+  discountPercent?: number;
+  discountAmount?: number;
+  taxAmount?: number;
+  netAmount: number;
+  paymentMethod: 'cash' | 'card' | 'upi' | 'cheque' | 'insurance' | 'exempt';
+  paymentStatus: 'paid' | 'pending' | 'partial' | 'refunded';
+  printedAt?: Date;
+  whatsappSentAt?: Date;
+  createdAt: Date;
+}
+
+// Billing Receipt Item
+export interface BillingReceiptItem {
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+}
+
 // Type exports
 export type InsertPatient = Omit<DoctorPatient, 'id'>;
 export type SelectPatient = DoctorPatient;
@@ -164,3 +217,7 @@ export type InsertSmartParsingRule = Omit<SmartParsingRule, 'id' | 'createdAt' |
 export type SelectSmartParsingRule = SmartParsingRule;
 export type InsertSmartParsingTemplate = Omit<SmartParsingTemplate, 'id' | 'createdAt' | 'updatedAt'>;
 export type SelectSmartParsingTemplate = SmartParsingTemplate;
+export type InsertBillingQueue = Omit<BillingQueueItem, 'id' | 'createdAt' | 'updatedAt'>;
+export type SelectBillingQueue = BillingQueueItem;
+export type InsertBillingReceipt = Omit<BillingReceipt, 'id' | 'createdAt'>;
+export type SelectBillingReceipt = BillingReceipt;

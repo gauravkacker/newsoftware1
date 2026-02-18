@@ -129,6 +129,10 @@ class LocalDatabase {
     this.store.set('combinations', []);
     this.store.set('medicineUsageMemory', []);
     
+    // Billing
+    this.store.set('billingQueue', []);
+    this.store.set('billingReceipts', []);
+    
     // Seed default smart parsing rules
     this.seedDefaultSmartParsingRules();
   }
@@ -1484,3 +1488,97 @@ export function ensureModule2DataSeeded(): void {
 
 // Call ensureDefaultFeeTypes when module loads
 ensureDefaultFeeTypes();
+
+// ============================================
+// Billing Queue Operations
+// ============================================
+
+export const billingQueueDb = {
+  getAll: () => db.getAll('billingQueue'),
+  getById: (id: string) => db.getById('billingQueue', id),
+  getByPatient: (patientId: string) => {
+    const items = db.getAll('billingQueue');
+    return items.filter((item: unknown) => {
+      const billing = item as { patientId: string };
+      return billing.patientId === patientId;
+    }).sort((a, b) => {
+      const billingA = a as { createdAt: Date };
+      const billingB = b as { createdAt: Date };
+      return new Date(billingB.createdAt).getTime() - new Date(billingA.createdAt).getTime();
+    });
+  },
+  getByStatus: (status: string) => {
+    const items = db.getAll('billingQueue');
+    return items.filter((item: unknown) => {
+      const billing = item as { status: string };
+      return billing.status === status;
+    }).sort((a, b) => {
+      const billingA = a as { createdAt: Date };
+      const billingB = b as { createdAt: Date };
+      return new Date(billingA.createdAt).getTime() - new Date(billingB.createdAt).getTime();
+    });
+  },
+  getPending: () => {
+    const items = db.getAll('billingQueue');
+    return items.filter((item: unknown) => {
+      const billing = item as { status: string };
+      return billing.status === 'pending' || billing.status === 'paid';
+    }).sort((a, b) => {
+      const billingA = a as { createdAt: Date };
+      const billingB = b as { createdAt: Date };
+      return new Date(billingA.createdAt).getTime() - new Date(billingB.createdAt).getTime();
+    });
+  },
+  create: (item: Parameters<typeof db.create>[1]) => db.create('billingQueue', item),
+  update: (id: string, updates: Parameters<typeof db.update>[2]) => db.update('billingQueue', id, updates),
+  delete: (id: string) => db.delete('billingQueue', id),
+  markPaid: (id: string, paymentMethod: string, receiptNumber: string) => db.update('billingQueue', id, {
+    status: 'paid',
+    paymentStatus: 'paid',
+    paymentMethod,
+    receiptNumber,
+    receiptGeneratedAt: new Date()
+  }),
+  markCompleted: (id: string) => db.update('billingQueue', id, { status: 'completed' }),
+  generateReceiptNumber: () => {
+    const receipts = db.getAll('billingReceipts');
+    const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    const todayReceipts = receipts.filter((r: unknown) => {
+      const receipt = r as { receiptNumber: string };
+      return receipt.receiptNumber.includes(today);
+    });
+    const sequence = (todayReceipts.length + 1).toString().padStart(4, '0');
+    return `RCP-${today}-${sequence}`;
+  }
+};
+
+// ============================================
+// Billing Receipt Operations
+// ============================================
+
+export const billingReceiptDb = {
+  getAll: () => db.getAll('billingReceipts'),
+  getById: (id: string) => db.getById('billingReceipts', id),
+  getByPatient: (patientId: string) => {
+    const receipts = db.getAll('billingReceipts');
+    return receipts.filter((r: unknown) => {
+      const receipt = r as { patientId: string };
+      return receipt.patientId === patientId;
+    }).sort((a, b) => {
+      const receiptA = a as { createdAt: Date };
+      const receiptB = b as { createdAt: Date };
+      return new Date(receiptB.createdAt).getTime() - new Date(receiptA.createdAt).getTime();
+    });
+  },
+  getByReceiptNumber: (receiptNumber: string) => {
+    const receipts = db.getAll('billingReceipts');
+    return receipts.find((r: unknown) => {
+      const receipt = r as { receiptNumber: string };
+      return receipt.receiptNumber === receiptNumber;
+    });
+  },
+  create: (receipt: Parameters<typeof db.create>[1]) => db.create('billingReceipts', receipt),
+  update: (id: string, updates: Parameters<typeof db.update>[2]) => db.update('billingReceipts', id, updates),
+  markPrinted: (id: string) => db.update('billingReceipts', id, { printedAt: new Date() }),
+  markWhatsappSent: (id: string) => db.update('billingReceipts', id, { whatsappSentAt: new Date() })
+};
