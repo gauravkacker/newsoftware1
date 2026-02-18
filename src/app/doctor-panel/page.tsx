@@ -1754,12 +1754,36 @@ export default function DoctorPanelPage() {
     if (!savedVisitId || !patient) return;
     
     console.log('[DoctorPanel] Sending to pharmacy, currentAppointmentFee:', currentAppointmentFee);
+    console.log('[DoctorPanel] appointmentId being passed:', currentAppointmentFee?.appointmentId);
+    
+    // If currentAppointmentFee is not set, try to find the appointment now
+    let appointmentIdToUse = currentAppointmentFee?.appointmentId;
+    
+    if (!appointmentIdToUse && patient) {
+      // Fallback: Find today's appointment for this patient
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(today);
+      todayEnd.setHours(23, 59, 59, 999);
+      
+      const appointments = appointmentDb.getByPatient(patient.id) as Appointment[];
+      const todayAppointment = appointments.find((apt: Appointment) => {
+        const aptDate = new Date(apt.appointmentDate);
+        return aptDate >= today && aptDate <= todayEnd && 
+               (apt.status === 'checked-in' || apt.status === 'in-progress' || apt.status === 'scheduled');
+      });
+      
+      if (todayAppointment) {
+        appointmentIdToUse = todayAppointment.id;
+        console.log('[DoctorPanel] Fallback: Found appointmentId:', appointmentIdToUse);
+      }
+    }
     
     // Add to pharmacy queue with appointment ID
     pharmacyQueueDb.create({
       visitId: savedVisitId,
       patientId: patient.id,
-      appointmentId: currentAppointmentFee?.appointmentId,
+      appointmentId: appointmentIdToUse,
       prescriptionIds: [],
       priority: false,
       status: 'pending',
