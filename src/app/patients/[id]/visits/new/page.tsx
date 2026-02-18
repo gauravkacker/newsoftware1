@@ -6,8 +6,8 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
-import { patientDb, visitDb, feeHistoryDb, feeDb, appointmentDb } from "@/lib/db/database";
-import type { Patient, Visit, FeeType, Appointment } from "@/types";
+import { patientDb, visitDb, feeHistoryDb, appointmentDb, feeDb } from "@/lib/db/database";
+import type { Patient, Visit, Appointment, FeeType } from "@/types";
 
 export default function NewVisitPage() {
   const router = useRouter();
@@ -33,20 +33,17 @@ export default function NewVisitPage() {
     const patientData = patientDb.getById(patientId) as Patient | undefined;
     setPatient(patientData || null);
     
-    // Load fee types from database
-    const activeFees = feeDb.getActive() as FeeType[];
-    setFeeTypes(activeFees);
+    // Load fee types
+    const fees = feeDb.getAll() as FeeType[];
+    setFeeTypes(fees);
     
     // Check for today's appointment for this patient
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const allAppointments = appointmentDb.getAll() as Appointment[];
-    const patientTodayAppt = allAppointments.find((apt: Appointment) => {
-      const aptDate = new Date(apt.appointmentDate);
-      aptDate.setHours(0, 0, 0, 0);
-      return apt.patientId === patientId && aptDate.getTime() === today.getTime();
-    });
-    setTodayAppointment(patientTodayAppt || null);
+    const today = new Date().toISOString().split("T")[0];
+    const appointments = appointmentDb.getAll() as Appointment[];
+    const todayAppt = appointments.find(
+      (a) => a.patientId === patientId && new Date(a.appointmentDate).toISOString().split("T")[0] === today
+    );
+    setTodayAppointment(todayAppt || null);
   }, [patientId]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -94,22 +91,14 @@ export default function NewVisitPage() {
       if (!formData.isSelfRepeat) {
         const feeType = visitNumber === 1 ? "first-visit" : "follow-up";
         
-        // Determine fee amount from appointment or fee types
+        // Get fee amount from appointment or fee types configuration
         let feeAmount = 0;
-        let paymentStatus: "paid" | "pending" = "pending";
-        let paymentMethod: "cash" | "card" | "upi" | "cheque" | "insurance" | "exempt" = "cash";
+        let paymentStatus: 'paid' | 'pending' | 'exempt' = 'pending';
         
         if (todayAppointment) {
           // Use fee from appointment
           feeAmount = (todayAppointment.feeAmount as number) || 0;
           paymentStatus = todayAppointment.feeStatus === 'paid' ? 'paid' : 'pending';
-          paymentMethod = (todayAppointment.paymentMode as "cash" | "card" | "upi" | "cheque" | "insurance" | "exempt") || "cash";
-          
-          // Update appointment with visit reference
-          appointmentDb.update(todayAppointment.id, {
-            status: 'completed',
-            feeStatus: todayAppointment.feeStatus || 'pending',
-          });
         } else {
           // Get fee from fee types configuration
           const targetFeeName = visitNumber === 1 ? "New Patient" : "Follow Up";
@@ -123,9 +112,9 @@ export default function NewVisitPage() {
           receiptId: `rcpt-${Date.now()}`,
           feeType,
           amount: feeAmount,
-          paymentMethod,
+          paymentMethod: "cash" as const,
           paymentStatus,
-          paidDate: new Date(),
+          paidDate: paymentStatus === 'paid' ? new Date() : undefined,
         });
       }
 
@@ -143,7 +132,7 @@ export default function NewVisitPage() {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <Card className="p-8 text-center">
           <h2 className="text-xl font-medium text-gray-900 mb-2">Patient Not Found</h2>
-          <p className="text-gray-500 mb-4">The patient record does not exist.</p>
+          <p className="text-gray-500 mb-4">The patient record doesn&apos;t exist.</p>
           <Button onClick={() => router.push("/patients")} variant="primary">
             Back to Patients
           </Button>
