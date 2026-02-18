@@ -159,8 +159,11 @@ export default function BillingPage() {
         // Try to get fee from the appointment first
         if (pharmacyItem.appointmentId) {
           const appointment = appointmentDb.getById(pharmacyItem.appointmentId);
+          console.log('[Billing] Looking up appointment by ID:', pharmacyItem.appointmentId);
+          console.log('[Billing] Found appointment:', appointment);
           if (appointment) {
             const apt = appointment as { feeAmount?: number; feeType?: string };
+            console.log('[Billing] Appointment feeAmount:', apt.feeAmount, 'feeType:', apt.feeType);
             if (apt.feeAmount !== undefined && apt.feeAmount !== null) {
               feeAmount = apt.feeAmount;
             }
@@ -169,6 +172,7 @@ export default function BillingPage() {
             }
           }
         } else {
+          console.log('[Billing] No appointmentId on pharmacyItem, pharmacyItem:', pharmacyItem);
           // No appointmentId - try to find today's appointment for this patient
           const patientAppointments = appointmentDb.getByPatient(pharmacyItem.patientId);
           const today = new Date();

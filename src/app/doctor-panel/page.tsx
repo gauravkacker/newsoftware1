@@ -712,6 +712,8 @@ export default function DoctorPanelPage() {
     if (todayAppointment) {
       // Use appointment fees
       const apt = todayAppointment as Appointment & { feeTypeId?: string; feeId?: string };
+      console.log('[DoctorPanel] Found today appointment:', todayAppointment);
+      console.log('[DoctorPanel] Setting appointmentId:', todayAppointment.id);
       setCurrentAppointmentFee({
         feeAmount: (todayAppointment.feeAmount as number) || 0,
         feeType: (todayAppointment.feeType as string) || 'consultation',
@@ -1750,6 +1752,8 @@ export default function DoctorPanelPage() {
   // Send prescription to pharmacy queue
   const handleSendToPharmacy = () => {
     if (!savedVisitId || !patient) return;
+    
+    console.log('[DoctorPanel] Sending to pharmacy, currentAppointmentFee:', currentAppointmentFee);
     
     // Add to pharmacy queue with appointment ID
     pharmacyQueueDb.create({
