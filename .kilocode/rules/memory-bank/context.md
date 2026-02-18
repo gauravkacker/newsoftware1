@@ -119,3 +119,4 @@ bun typecheck  # TypeScript checking
 | February 2026 | Enhanced pharmacy module: 25/75 layout, Prepared tab, Reopen functionality |
 | February 2026 | Added medicines-prepared status for appointments, linked pharmacy to appointments |
 | February 2026 | **Added Billing Module**: Complete billing workflow with fee editing, receipts, fee history, WhatsApp/Print/PDF options, and integration with pharmacy and doctor panel |
+| February 2026 | **Fee Synchronization Fix**: Fixed hardcoded fees (500/300) in visits/new page - now fetches correct fee from appointment or fee types configuration |
