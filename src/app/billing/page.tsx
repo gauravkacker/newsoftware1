@@ -98,11 +98,70 @@ export default function BillingPage() {
     // Get all items from billing queue
     const allItems = billingQueueDb.getAll() as BillingQueueItem[];
     
+    // Update fees from appointments for pending items
+    allItems.forEach((item) => {
+      if (item.status === 'pending') {
+        let correctFee = item.feeAmount;
+        let correctFeeType = item.feeType;
+        let foundAppointment = false;
+        
+        // Try to get fee from appointmentId first
+        if (item.appointmentId) {
+          const appointment = appointmentDb.getById(item.appointmentId);
+          if (appointment) {
+            const apt = appointment as { feeAmount?: number; feeType?: string };
+            if (apt.feeAmount !== undefined && apt.feeAmount !== null) {
+              correctFee = apt.feeAmount;
+              correctFeeType = apt.feeType || correctFeeType;
+              foundAppointment = true;
+              console.log('[Billing] Found fee from appointmentId:', apt.feeAmount);
+            }
+          }
+        }
+        
+        // If no appointmentId or not found, try to find today's appointment for this patient
+        if (!foundAppointment) {
+          const patientAppointments = appointmentDb.getByPatient(item.patientId);
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const todayEnd = new Date(today);
+          todayEnd.setHours(23, 59, 59, 999);
+          
+          const todayAppointment = patientAppointments.find((apt: any) => {
+            const aptDate = new Date(apt.appointmentDate);
+            return aptDate >= today && aptDate <= todayEnd;
+          });
+          
+          if (todayAppointment) {
+            const apt = todayAppointment as { feeAmount?: number; feeType?: string };
+            if (apt.feeAmount !== undefined && apt.feeAmount !== null) {
+              correctFee = apt.feeAmount;
+              correctFeeType = apt.feeType || correctFeeType;
+              console.log('[Billing] Found fee from today\'s appointment:', apt.feeAmount);
+            }
+          }
+        }
+        
+        // Update if fee is different
+        if (correctFee !== item.feeAmount) {
+          billingQueueDb.update(item.id, {
+            feeAmount: correctFee,
+            feeType: correctFeeType,
+            netAmount: correctFee - (item.discountAmount || 0)
+          });
+          console.log('[Billing] Updated fee for existing item:', item.id, 'from', item.feeAmount, 'to', correctFee);
+        }
+      }
+    });
+    
+    // Re-fetch items after potential updates
+    const updatedItems = billingQueueDb.getAll() as BillingQueueItem[];
+    
     // Separate pending and completed items
-    const pending = allItems.filter(
+    const pending = updatedItems.filter(
       (item) => item.status === 'pending' || item.status === 'paid'
     );
-    const completed = allItems.filter(
+    const completed = updatedItems.filter(
       (item) => item.status === 'completed'
     );
     
