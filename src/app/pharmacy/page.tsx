@@ -6,8 +6,9 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { pharmacyQueueDb, doctorPrescriptionDb, doctorVisitDb } from '@/lib/db/doctor-panel';
-import { patientDb } from '@/lib/db/database';
+import { patientDb, appointmentDb, feeHistoryDb } from '@/lib/db/database';
 import type { PharmacyQueueItem, DoctorPrescription, DoctorVisit } from '@/lib/db/schema';
+import type { Appointment, FeeHistoryEntry } from '@/types';
 
 // Types
 interface PatientInfo {
@@ -25,6 +26,12 @@ interface PharmacyQueueItemWithDetails extends PharmacyQueueItem {
   visit?: DoctorVisit;
   prescriptions?: DoctorPrescription[];
   hasUpdates?: boolean; // Track if doctor made changes
+  feeInfo?: {
+    amount: number;
+    feeType: string;
+    status: string;
+    paymentMethod?: string;
+  };
 }
 
 type TabType = 'active' | 'prepared';
@@ -97,12 +104,46 @@ export default function PharmacyPage() {
         // Update the ref
         previousPrescriptionIds.current.set(item.id, currentPrescriptionIds);
         
+        // Get fee info from appointment or fee history
+        let feeInfo: { amount: number; feeType: string; status: string; paymentMethod?: string } | undefined;
+        
+        // First check today's appointment for this patient
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const allAppointments = appointmentDb.getAll() as Appointment[];
+        const todayAppointment = allAppointments.find((apt: Appointment) => {
+          const aptDate = new Date(apt.appointmentDate);
+          aptDate.setHours(0, 0, 0, 0);
+          return apt.patientId === item.patientId && aptDate.getTime() === today.getTime();
+        });
+        
+        if (todayAppointment) {
+          feeInfo = {
+            amount: (todayAppointment.feeAmount as number) || 0,
+            feeType: (todayAppointment.feeType as string) || 'consultation',
+            status: (todayAppointment.feeStatus as string) || 'pending',
+            paymentMethod: todayAppointment.paymentMode,
+          };
+        } else {
+          // Check fee history for this patient
+          const lastFee = feeHistoryDb.getLastByPatient(item.patientId) as FeeHistoryEntry | null;
+          if (lastFee) {
+            feeInfo = {
+              amount: lastFee.amount,
+              feeType: lastFee.feeType,
+              status: lastFee.paymentStatus,
+              paymentMethod: lastFee.paymentMethod,
+            };
+          }
+        }
+        
         return {
           ...item,
           patient,
           visit: visit || undefined,
           prescriptions,
           hasUpdates,
+          feeInfo,
         };
       });
     };
@@ -478,6 +519,30 @@ export default function PharmacyPage() {
                           </div>
                         </div>
                       </div>
+                      
+                      {/* Fee Info */}
+                      {selectedItem.feeInfo && (
+                        <div className="mt-3 pt-3 border-t border-blue-200">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="text-xs text-gray-500">Fee</div>
+                              <div className="font-semibold text-gray-900">
+                                ₹{selectedItem.feeInfo.amount} ({selectedItem.feeInfo.feeType})
+                              </div>
+                            </div>
+                            <div className={`px-2 py-1 rounded-full text-xs font-medium ${
+                              selectedItem.feeInfo.status === 'paid' 
+                                ? 'bg-green-100 text-green-800' 
+                                : selectedItem.feeInfo.status === 'exempt'
+                                ? 'bg-purple-100 text-purple-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {selectedItem.feeInfo.status === 'paid' ? 'Paid' : 
+                               selectedItem.feeInfo.status === 'exempt' ? 'Exempt' : 'Due'}
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {/* Visit Details */}

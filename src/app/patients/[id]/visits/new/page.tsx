@@ -6,8 +6,8 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
-import { patientDb, visitDb, feeHistoryDb } from "@/lib/db/database";
-import type { Patient, Visit } from "@/types";
+import { patientDb, visitDb, feeHistoryDb, feeDb, appointmentDb } from "@/lib/db/database";
+import type { Patient, Visit, FeeType, Appointment } from "@/types";
 
 export default function NewVisitPage() {
   const router = useRouter();
@@ -16,6 +16,8 @@ export default function NewVisitPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [patient, setPatient] = useState<Patient | null>(null);
   const [loading, setLoading] = useState(false);
+  const [feeTypes, setFeeTypes] = useState<FeeType[]>([]);
+  const [todayAppointment, setTodayAppointment] = useState<Appointment | null>(null);
 
   const [formData, setFormData] = useState({
     visitDate: new Date().toISOString().split("T")[0],
@@ -30,6 +32,21 @@ export default function NewVisitPage() {
   useEffect(() => {
     const patientData = patientDb.getById(patientId) as Patient | undefined;
     setPatient(patientData || null);
+    
+    // Load fee types from database
+    const activeFees = feeDb.getActive() as FeeType[];
+    setFeeTypes(activeFees);
+    
+    // Check for today's appointment for this patient
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const allAppointments = appointmentDb.getAll() as Appointment[];
+    const patientTodayAppt = allAppointments.find((apt: Appointment) => {
+      const aptDate = new Date(apt.appointmentDate);
+      aptDate.setHours(0, 0, 0, 0);
+      return apt.patientId === patientId && aptDate.getTime() === today.getTime();
+    });
+    setTodayAppointment(patientTodayAppt || null);
   }, [patientId]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -76,14 +93,38 @@ export default function NewVisitPage() {
       // Create fee entry if not self-repeat
       if (!formData.isSelfRepeat) {
         const feeType = visitNumber === 1 ? "first-visit" : "follow-up";
+        
+        // Determine fee amount from appointment or fee types
+        let feeAmount = 0;
+        let paymentStatus: "paid" | "pending" = "pending";
+        let paymentMethod: "cash" | "card" | "upi" | "cheque" | "insurance" | "exempt" = "cash";
+        
+        if (todayAppointment) {
+          // Use fee from appointment
+          feeAmount = (todayAppointment.feeAmount as number) || 0;
+          paymentStatus = todayAppointment.feeStatus === 'paid' ? 'paid' : 'pending';
+          paymentMethod = (todayAppointment.paymentMode as "cash" | "card" | "upi" | "cheque" | "insurance" | "exempt") || "cash";
+          
+          // Update appointment with visit reference
+          appointmentDb.update(todayAppointment.id, {
+            status: 'completed',
+            feeStatus: todayAppointment.feeStatus || 'pending',
+          });
+        } else {
+          // Get fee from fee types configuration
+          const targetFeeName = visitNumber === 1 ? "New Patient" : "Follow Up";
+          const matchingFee = feeTypes.find(f => f.name === targetFeeName);
+          feeAmount = matchingFee?.amount || 0;
+        }
+        
         feeHistoryDb.create({
           patientId,
           visitId: visit.id,
           receiptId: `rcpt-${Date.now()}`,
           feeType,
-          amount: feeType === "first-visit" ? 500 : 300,
-          paymentMethod: "cash" as const,
-          paymentStatus: "paid" as const,
+          amount: feeAmount,
+          paymentMethod,
+          paymentStatus,
           paidDate: new Date(),
         });
       }
