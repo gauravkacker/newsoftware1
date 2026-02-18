@@ -152,11 +152,24 @@ export default function BillingPage() {
         const patient = patientDb.getById(pharmacyItem.patientId) as PatientInfo | undefined;
         const visit = doctorVisitDb.getById(pharmacyItem.visitId);
         
-        // Determine fee amount based on visit type
+        // Get fee from appointment (the actual fee selected during booking)
         let feeAmount = 300; // Default fee
         let feeType = 'Consultation';
         
-        if (visit) {
+        // Try to get fee from the appointment first
+        if (pharmacyItem.appointmentId) {
+          const appointment = appointmentDb.getById(pharmacyItem.appointmentId);
+          if (appointment) {
+            const apt = appointment as { feeAmount?: number; feeType?: string };
+            if (apt.feeAmount !== undefined && apt.feeAmount !== null) {
+              feeAmount = apt.feeAmount;
+            }
+            if (apt.feeType) {
+              feeType = apt.feeType;
+            }
+          }
+        } else if (visit) {
+          // Fallback to visit type based fee only if no appointment fee
           if (visit.visitNumber === 1) {
             feeAmount = 500;
             feeType = 'New Patient';

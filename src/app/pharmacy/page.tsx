@@ -208,11 +208,21 @@ export default function PharmacyPage() {
       const patient = patientDb.getById(pharmacyItem.patientId) as PatientInfo | undefined;
       const visit = doctorVisitDb.getById(pharmacyItem.visitId);
       
-      // Determine fee amount based on visit type
+      // Get fee from appointment (the actual fee selected during booking)
       let feeAmount = 300; // Default follow-up fee
       let feeType = 'Follow Up';
       
-      if (visit && visit.visitNumber === 1) {
+      // Try to get fee from the appointment first
+      if (relevantAppointment) {
+        const apt = relevantAppointment as { feeAmount?: number; feeType?: string; feeStatus?: string };
+        if (apt.feeAmount !== undefined && apt.feeAmount !== null) {
+          feeAmount = apt.feeAmount;
+        }
+        if (apt.feeType) {
+          feeType = apt.feeType;
+        }
+      } else if (visit && visit.visitNumber === 1) {
+        // Fallback to visit type based fee only if no appointment fee
         feeAmount = 500;
         feeType = 'New Patient';
       }

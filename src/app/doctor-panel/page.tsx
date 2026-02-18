@@ -741,15 +741,17 @@ export default function DoctorPanelPage() {
         feeType: lastFee.feeType,
         status: 'paid',
       });
-    } else if (todayAppointment && todayAppointment.feeStatus === 'pending') {
-      // If no paid fee history but current appointment has pending/due fee, show that as last fee info
+    } else if (todayAppointment) {
+      // If no paid fee history but current appointment exists, show the appointment fee as last fee info
+      // This handles new patients and shows their fee regardless of status (pending, paid, exempt)
       const aptDate = new Date(todayAppointment.appointmentDate);
+      const feeStatus = (todayAppointment.feeStatus as string) || 'pending';
       setLastFeeInfo({
         date: aptDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
         amount: (todayAppointment.feeAmount as number) || 0,
         daysAgo: 0,
         feeType: (todayAppointment.feeType as string) || 'consultation',
-        status: 'pending',
+        status: feeStatus as 'paid' | 'pending',
       });
     } else {
       setLastFeeInfo(null);
@@ -1762,11 +1764,16 @@ export default function DoctorPanelPage() {
   const handleSendToBilling = () => {
     if (!savedVisitId || !patient) return;
     
-    // Determine fee amount based on visit type
+    // Get fee from current appointment fee (the actual fee selected during booking)
     let feeAmount = 300; // Default follow-up fee
     let feeType = 'Follow Up';
     
-    if (currentVisit && currentVisit.visitNumber === 1) {
+    // Use the current appointment fee if available
+    if (currentAppointmentFee && currentAppointmentFee.feeAmount > 0) {
+      feeAmount = currentAppointmentFee.feeAmount;
+      feeType = currentAppointmentFee.feeType || 'Follow Up';
+    } else if (currentVisit && currentVisit.visitNumber === 1) {
+      // Fallback to visit type based fee only if no appointment fee
       feeAmount = 500;
       feeType = 'New Patient';
     }
