@@ -703,8 +703,9 @@ export default function DoctorPanelPage() {
     const appointments = appointmentDb.getByPatient(patientData.id) as Appointment[];
     const todayAppointment = appointments.find((apt: Appointment) => {
       const aptDate = new Date(apt.appointmentDate);
+      // Include scheduled appointments for fee display (new patients may have scheduled status)
       return aptDate >= today && aptDate <= todayEnd && 
-             (apt.status === 'checked-in' || apt.status === 'in-progress');
+             (apt.status === 'checked-in' || apt.status === 'in-progress' || apt.status === 'scheduled');
     });
     
     if (todayAppointment) {
