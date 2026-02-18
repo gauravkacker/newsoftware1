@@ -168,14 +168,36 @@ export default function BillingPage() {
               feeType = apt.feeType;
             }
           }
-        } else if (visit) {
-          // Fallback to visit type based fee only if no appointment fee
-          if (visit.visitNumber === 1) {
-            feeAmount = 500;
-            feeType = 'New Patient';
-          } else {
-            feeAmount = 300;
-            feeType = 'Follow Up';
+        } else {
+          // No appointmentId - try to find today's appointment for this patient
+          const patientAppointments = appointmentDb.getByPatient(pharmacyItem.patientId);
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const todayEnd = new Date(today);
+          todayEnd.setHours(23, 59, 59, 999);
+          
+          const todayAppointment = patientAppointments.find((apt: any) => {
+            const aptDate = new Date(apt.appointmentDate);
+            return aptDate >= today && aptDate <= todayEnd;
+          });
+          
+          if (todayAppointment) {
+            const apt = todayAppointment as { feeAmount?: number; feeType?: string };
+            if (apt.feeAmount !== undefined && apt.feeAmount !== null) {
+              feeAmount = apt.feeAmount;
+            }
+            if (apt.feeType) {
+              feeType = apt.feeType;
+            }
+          } else if (visit) {
+            // Fallback to visit type based fee only if no appointment fee
+            if (visit.visitNumber === 1) {
+              feeAmount = 500;
+              feeType = 'New Patient';
+            } else {
+              feeAmount = 300;
+              feeType = 'Follow Up';
+            }
           }
         }
         

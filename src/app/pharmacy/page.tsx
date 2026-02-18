@@ -232,14 +232,24 @@ export default function PharmacyPage() {
     
     // Update appointment status to medicines-prepared and send to billing
     if (pharmacyItem) {
-      const patientAppointments = appointmentDb.getByPatient(pharmacyItem.patientId);
-      // Find today's appointment that is in 'completed' status (after doctor visit)
-      const today = new Date().toISOString().split('T')[0];
-      const relevantAppointment = patientAppointments.find((apt) => {
-        const typedApt = apt as { appointmentDate: Date; status: string };
-        const aptDate = new Date(typedApt.appointmentDate).toISOString().split('T')[0];
-        return aptDate === today && (typedApt.status === 'completed' || typedApt.status === 'in-progress');
-      });
+      let relevantAppointment = null;
+      
+      // First try to get appointment by ID if available
+      if (pharmacyItem.appointmentId) {
+        relevantAppointment = appointmentDb.getById(pharmacyItem.appointmentId);
+      }
+      
+      // If no appointmentId, try to find today's appointment for this patient
+      if (!relevantAppointment) {
+        const patientAppointments = appointmentDb.getByPatient(pharmacyItem.patientId);
+        // Find today's appointment that is in 'completed' status (after doctor visit)
+        const today = new Date().toISOString().split('T')[0];
+        relevantAppointment = patientAppointments.find((apt) => {
+          const typedApt = apt as { appointmentDate: Date; status: string };
+          const aptDate = new Date(typedApt.appointmentDate).toISOString().split('T')[0];
+          return aptDate === today && (typedApt.status === 'completed' || typedApt.status === 'in-progress');
+        });
+      }
       
       if (relevantAppointment) {
         appointmentDb.update((relevantAppointment as { id: string }).id, { status: 'medicines-prepared' });
@@ -272,7 +282,7 @@ export default function PharmacyPage() {
       billingQueueDb.create({
         visitId: pharmacyItem.visitId,
         patientId: pharmacyItem.patientId,
-        appointmentId: pharmacyItem.appointmentId,
+        appointmentId: pharmacyItem.appointmentId || (relevantAppointment as { id: string })?.id,
         prescriptionIds: pharmacyItem.prescriptionIds || [],
         status: 'pending',
         feeAmount,

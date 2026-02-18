@@ -401,6 +401,7 @@ export default function DoctorPanelPage() {
     feeTypeId: string;
     feeStatus: string;
     feeId?: string;
+    appointmentId?: string;
   } | null>(null);
   
   // Combination medicines - now uses inline editing instead of modal
@@ -717,6 +718,7 @@ export default function DoctorPanelPage() {
         feeTypeId: apt.feeTypeId || '',
         feeStatus: (todayAppointment.feeStatus as string) || 'pending',
         feeId: apt.feeId || '',
+        appointmentId: todayAppointment.id,
       });
       setFeeAmount(String((todayAppointment.feeAmount as number) || ''));
       setFeeType((todayAppointment.feeType as string) || 'consultation');
@@ -1749,10 +1751,11 @@ export default function DoctorPanelPage() {
   const handleSendToPharmacy = () => {
     if (!savedVisitId || !patient) return;
     
-    // Add to pharmacy queue
+    // Add to pharmacy queue with appointment ID
     pharmacyQueueDb.create({
       visitId: savedVisitId,
       patientId: patient.id,
+      appointmentId: currentAppointmentFee?.appointmentId,
       prescriptionIds: [],
       priority: false,
       status: 'pending',
@@ -1783,7 +1786,7 @@ export default function DoctorPanelPage() {
     billingQueueDb.create({
       visitId: savedVisitId,
       patientId: patient.id,
-      appointmentId: currentAppointmentFee?.feeId,
+      appointmentId: currentAppointmentFee?.appointmentId,
       prescriptionIds: [],
       status: 'pending',
       feeAmount,
@@ -1793,14 +1796,8 @@ export default function DoctorPanelPage() {
     });
     
     // Update appointment status to medicines-prepared (bypassing pharmacy)
-    if (currentAppointmentFee?.feeId) {
-      const appointments = appointmentDb.getAll() as Appointment[];
-      const todayAppt = appointments.find((apt: Appointment) =>
-        apt.feeId === currentAppointmentFee.feeId
-      );
-      if (todayAppt) {
-        appointmentDb.update(todayAppt.id, { status: 'medicines-prepared' });
-      }
+    if (currentAppointmentFee?.appointmentId) {
+      appointmentDb.update(currentAppointmentFee.appointmentId, { status: 'medicines-prepared' });
     }
     
     setPharmacySent(true);
