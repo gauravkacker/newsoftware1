@@ -5,9 +5,9 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
-import { billingQueueDb, billingReceiptDb, patientDb, appointmentDb, feeHistoryDb, db } from '@/lib/db/database';
+import { billingQueueDb, billingReceiptDb, patientDb, appointmentDb, feeHistoryDb, db, medicineBillDb, medicineAmountMemoryDb } from '@/lib/db/database';
 import { pharmacyQueueDb, doctorPrescriptionDb, doctorVisitDb } from '@/lib/db/doctor-panel';
-import type { PharmacyQueueItem } from '@/lib/db/schema';
+import type { PharmacyQueueItem, MedicineBill, MedicineBillItem } from '@/lib/db/schema';
 import type { BillingQueueItem, BillingReceipt, BillingReceiptItem } from '@/lib/db/schema';
 import type { DoctorPrescription, DoctorVisit } from '@/lib/db/schema';
 
@@ -86,11 +86,13 @@ export default function BillingPage() {
   const [showPrescriptionPopup, setShowPrescriptionPopup] = useState(false);
   const [viewingPrescriptions, setViewingPrescriptions] = useState<DoctorPrescription[]>([]);
   const [viewingPatient, setViewingPatient] = useState<PatientInfo | null>(null);
+  const [viewingBillingItem, setViewingBillingItem] = useState<BillingQueueItemWithDetails | null>(null);
   
   // Bill creation state
   const [isBillMode, setIsBillMode] = useState(false);
   const [billItems, setBillItems] = useState<Array<{
     id: string;
+    prescriptionId: string;
     medicine: string;
     potency?: string;
     quantity: number;
@@ -104,6 +106,11 @@ export default function BillingPage() {
   const [billDiscount, setBillDiscount] = useState(0);
   const [billTax, setBillTax] = useState(0);
   const [billNotes, setBillNotes] = useState('');
+  const [savedMedicineBill, setSavedMedicineBill] = useState<MedicineBill | null>(null);
+  
+  // View saved bill state
+  const [showViewBillPopup, setShowViewBillPopup] = useState(false);
+  const [viewingMedicineBill, setViewingMedicineBill] = useState<MedicineBill | null>(null);
   
   // Fee history state
   const [showFeeHistory, setShowFeeHistory] = useState(false);
@@ -424,22 +431,58 @@ export default function BillingPage() {
   const handleViewPrescription = (item: BillingQueueItemWithDetails) => {
     setViewingPrescriptions(item.prescriptions || []);
     setViewingPatient(item.patient || null);
+    setViewingBillingItem(item);
     setIsBillMode(false);
-    setBillItems((item.prescriptions || []).map(rx => ({
-      id: rx.id || generateId(),
-      medicine: rx.medicine,
-      potency: rx.potency,
-      quantity: typeof rx.quantity === 'string' ? parseInt(rx.quantity, 10) || 1 : rx.quantity || 1,
-      dosePattern: rx.dosePattern,
-      frequency: rx.frequency,
-      duration: rx.duration,
-      isCombination: rx.isCombination,
-      combinationContent: rx.combinationContent,
-      amount: 0
-    })));
-    setBillDiscount(0);
-    setBillTax(0);
-    setBillNotes('');
+    
+    // Check for existing saved medicine bill
+    const existingBill = medicineBillDb.getByBillingQueueId(item.id) as MedicineBill | undefined;
+    
+    if (existingBill) {
+      // Load existing bill
+      setSavedMedicineBill(existingBill);
+      setBillItems(existingBill.items.map(billItem => ({
+        id: generateId(),
+        prescriptionId: billItem.prescriptionId,
+        medicine: billItem.medicine,
+        potency: billItem.potency,
+        quantity: billItem.quantity,
+        dosePattern: billItem.dosePattern,
+        frequency: billItem.frequency,
+        duration: billItem.duration,
+        isCombination: billItem.isCombination,
+        combinationContent: billItem.combinationContent,
+        amount: billItem.amount
+      })));
+      setBillDiscount(existingBill.discountPercent);
+      setBillTax(existingBill.taxPercent);
+      setBillNotes(existingBill.notes || '');
+    } else {
+      // Initialize with prescriptions and load amounts from memory
+      setSavedMedicineBill(null);
+      setBillItems((item.prescriptions || []).map(rx => {
+        // Try to get last used amount from memory
+        const memory = medicineAmountMemoryDb.getByMedicine(rx.medicine, rx.potency);
+        const lastAmount = memory ? (memory as { amount: number }).amount : 0;
+        
+        return {
+          id: generateId(),
+          prescriptionId: rx.id || generateId(),
+          medicine: rx.medicine,
+          potency: rx.potency,
+          quantity: typeof rx.quantity === 'string' ? parseInt(rx.quantity, 10) || 1 : rx.quantity || 1,
+          dosePattern: rx.dosePattern,
+          frequency: rx.frequency,
+          duration: rx.duration,
+          isCombination: rx.isCombination,
+          combinationContent: rx.combinationContent,
+          amount: lastAmount
+        };
+      }));
+      setBillDiscount(0);
+      setBillTax(0);
+      setBillNotes('');
+    }
+    
     setShowPrescriptionPopup(true);
   };
   
@@ -598,6 +641,67 @@ Get well soon.
     
     const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
     window.open(whatsappUrl, '_blank');
+  };
+  
+  // Save medicine bill
+  const handleSaveBill = () => {
+    if (!viewingBillingItem || !viewingPatient) return;
+    
+    const billItemsData: MedicineBillItem[] = billItems.map(item => ({
+      prescriptionId: item.prescriptionId,
+      medicine: item.medicine,
+      potency: item.potency,
+      quantity: item.quantity,
+      dosePattern: item.dosePattern,
+      frequency: item.frequency,
+      duration: item.duration,
+      isCombination: item.isCombination,
+      combinationContent: item.combinationContent,
+      amount: item.amount
+    }));
+    
+    const billData = {
+      billingQueueId: viewingBillingItem.id,
+      patientId: viewingPatient.id,
+      visitId: viewingBillingItem.visitId,
+      items: billItemsData,
+      subtotal: getBillSubtotal(),
+      discountPercent: billDiscount,
+      discountAmount: getBillDiscountAmount(),
+      taxPercent: billTax,
+      taxAmount: getBillTaxAmount(),
+      grandTotal: getBillTotal(),
+      notes: billNotes,
+      status: 'saved' as const
+    };
+    
+    if (savedMedicineBill) {
+      // Update existing bill
+      medicineBillDb.update(savedMedicineBill.id, billData);
+    } else {
+      // Create new bill
+      const newBill = medicineBillDb.create(billData) as unknown as MedicineBill;
+      setSavedMedicineBill(newBill);
+    }
+    
+    // Save amounts to memory for each medicine
+    billItems.forEach(item => {
+      if (item.amount > 0) {
+        medicineAmountMemoryDb.upsert(item.medicine, item.potency, item.amount);
+      }
+    });
+    
+    alert('Bill saved successfully!');
+    loadQueue();
+  };
+  
+  // View saved medicine bill
+  const handleViewSavedBill = (item: BillingQueueItemWithDetails) => {
+    const bill = medicineBillDb.getByBillingQueueId(item.id) as MedicineBill | undefined;
+    if (bill) {
+      setViewingMedicineBill(bill);
+      setShowViewBillPopup(true);
+    }
   };
 
   // View fee history
@@ -1007,6 +1111,15 @@ Get well soon.
                         >
                           View Prescription
                         </Button>
+                        {(medicineBillDb.getByBillingQueueId(item.id) as MedicineBill | undefined) && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleViewSavedBill(item)}
+                          >
+                            View Bill
+                          </Button>
+                        )}
                         <Button
                           variant="outline"
                           size="sm"
@@ -1342,6 +1455,9 @@ Get well soon.
                   <Button variant="outline" onClick={() => setIsBillMode(false)}>
                     Back to Prescription
                   </Button>
+                  <Button variant="primary" onClick={handleSaveBill}>
+                    {savedMedicineBill ? 'Update Bill' : 'Save Bill'}
+                  </Button>
                   <Button variant="outline" onClick={handlePrintBill}>
                     Print Bill
                   </Button>
@@ -1352,7 +1468,7 @@ Get well soon.
               ) : (
                 <>
                   <Button variant="primary" onClick={handleCreateBill}>
-                    Create Bill
+                    {savedMedicineBill ? 'Edit Bill' : 'Create Bill'}
                   </Button>
                   <Button variant="outline" onClick={handleWhatsAppReceipt}>
                     WhatsApp
@@ -1473,6 +1589,143 @@ Get well soon.
                 loadQueue();
               }}>
                 Done
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* View Saved Medicine Bill Popup */}
+      {showViewBillPopup && viewingMedicineBill && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <Card className="w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+              <div>
+                <h2 className="text-xl font-bold">Medicine Bill</h2>
+                <p className="text-sm text-gray-500">
+                  Created: {formatDate(viewingMedicineBill.createdAt)}
+                </p>
+              </div>
+              <Button variant="outline" onClick={() => setShowViewBillPopup(false)}>
+                Close
+              </Button>
+            </div>
+            
+            <div className="p-4 overflow-y-auto flex-1">
+              <table className="w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-2 text-left text-sm font-medium text-gray-500">Medicine</th>
+                    <th className="px-4 py-2 text-left text-sm font-medium text-gray-500">Potency</th>
+                    <th className="px-4 py-2 text-center text-sm font-medium text-gray-500">Qty</th>
+                    <th className="px-4 py-2 text-right text-sm font-medium text-gray-500">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {viewingMedicineBill.items.map((item, index) => (
+                    <tr key={index}>
+                      <td className="px-4 py-2">
+                        <div className="font-medium">{item.medicine}</div>
+                        {item.isCombination && (
+                          <div className="text-xs text-gray-500">{item.combinationContent}</div>
+                        )}
+                      </td>
+                      <td className="px-4 py-2">{item.potency || '-'}</td>
+                      <td className="px-4 py-2 text-center">{item.quantity}</td>
+                      <td className="px-4 py-2 text-right">{formatCurrency(item.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              
+              {/* Bill Summary */}
+              <div className="border-t border-gray-200 pt-4 mt-4">
+                <div className="flex justify-end">
+                  <div className="w-64 space-y-2">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Subtotal:</span>
+                      <span className="font-medium">{formatCurrency(viewingMedicineBill.subtotal)}</span>
+                    </div>
+                    {viewingMedicineBill.discountPercent > 0 && (
+                      <div className="flex justify-between text-green-600">
+                        <span>Discount ({viewingMedicineBill.discountPercent}%):</span>
+                        <span>-{formatCurrency(viewingMedicineBill.discountAmount)}</span>
+                      </div>
+                    )}
+                    {viewingMedicineBill.taxPercent > 0 && (
+                      <div className="flex justify-between">
+                        <span>Tax ({viewingMedicineBill.taxPercent}%):</span>
+                        <span>+{formatCurrency(viewingMedicineBill.taxAmount)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between font-bold text-lg border-t pt-2">
+                      <span>Grand Total:</span>
+                      <span>{formatCurrency(viewingMedicineBill.grandTotal)}</span>
+                    </div>
+                  </div>
+                </div>
+                {viewingMedicineBill.notes && (
+                  <div className="mt-4 text-sm text-gray-600">
+                    <strong>Notes:</strong> {viewingMedicineBill.notes}
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            <div className="p-4 border-t border-gray-200 flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setShowViewBillPopup(false)}>
+                Close
+              </Button>
+              <Button variant="outline" onClick={() => {
+                // Print the saved bill
+                const printContent = `
+                  <!DOCTYPE html>
+                  <html>
+                  <head>
+                    <title>Medicine Bill</title>
+                    <style>
+                      body { font-family: Arial, sans-serif; padding: 20px; max-width: 500px; margin: 0 auto; }
+                      .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 15px; }
+                      .items { border-top: 1px solid #ccc; border-bottom: 1px solid #ccc; padding: 10px 0; margin: 10px 0; }
+                      .item { display: flex; justify-content: space-between; margin: 8px 0; font-size: 14px; }
+                      .totals { margin-top: 15px; }
+                      .totals div { display: flex; justify-content: space-between; margin: 5px 0; }
+                      .grand-total { font-weight: bold; font-size: 16px; border-top: 1px solid #000; padding-top: 8px; margin-top: 8px; }
+                      @media print { body { padding: 0; } }
+                    </style>
+                  </head>
+                  <body>
+                    <div class="header">
+                      <h2 style="margin: 0;">HomeoPMS Clinic</h2>
+                      <p style="margin: 5px 0;">Medicine Bill</p>
+                      <div style="font-size: 14px;">Date: ${formatDate(viewingMedicineBill.createdAt)}</div>
+                    </div>
+                    <div class="items">
+                      ${viewingMedicineBill.items.filter(item => item.amount > 0).map(item => `
+                        <div class="item">
+                          <span>${item.medicine}${item.potency ? ` (${item.potency})` : ''}</span>
+                          <span>Qty: ${item.quantity}</span>
+                          <span>${formatCurrency(item.amount)}</span>
+                        </div>
+                      `).join('')}
+                    </div>
+                    <div class="totals">
+                      <div><span>Subtotal:</span><span>${formatCurrency(viewingMedicineBill.subtotal)}</span></div>
+                      ${viewingMedicineBill.discountPercent > 0 ? `<div style="color: green;"><span>Discount (${viewingMedicineBill.discountPercent}%):</span><span>-${formatCurrency(viewingMedicineBill.discountAmount)}</span></div>` : ''}
+                      ${viewingMedicineBill.taxPercent > 0 ? `<div><span>Tax (${viewingMedicineBill.taxPercent}%):</span><span>+${formatCurrency(viewingMedicineBill.taxAmount)}</span></div>` : ''}
+                      <div class="grand-total"><span>Grand Total:</span><span>${formatCurrency(viewingMedicineBill.grandTotal)}</span></div>
+                    </div>
+                    <script>window.print();</script>
+                  </body>
+                  </html>
+                `;
+                const printWindow = window.open('', '_blank');
+                if (printWindow) {
+                  printWindow.document.write(printContent);
+                  printWindow.document.close();
+                }
+              }}>
+                Print
               </Button>
             </div>
           </Card>

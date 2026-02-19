@@ -196,6 +196,48 @@ export interface BillingReceiptItem {
   total: number;
 }
 
+// Medicine Bill (for prescription-based billing)
+export interface MedicineBill {
+  id: string;
+  billingQueueId: string;
+  patientId: string;
+  visitId: string;
+  items: MedicineBillItem[];
+  subtotal: number;
+  discountPercent: number;
+  discountAmount: number;
+  taxPercent: number;
+  taxAmount: number;
+  grandTotal: number;
+  notes?: string;
+  status: 'draft' | 'saved' | 'paid';
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// Medicine Bill Item
+export interface MedicineBillItem {
+  prescriptionId: string;
+  medicine: string;
+  potency?: string;
+  quantity: number;
+  dosePattern?: string;
+  frequency?: string;
+  duration?: string;
+  isCombination?: boolean;
+  combinationContent?: string;
+  amount: number;
+}
+
+// Medicine Amount Memory (for remembering last entered amounts)
+export interface MedicineAmountMemory {
+  id: string;
+  medicine: string;
+  potency?: string;
+  amount: number;
+  lastUsedAt: Date;
+}
+
 // Type exports
 export type InsertPatient = Omit<DoctorPatient, 'id'>;
 export type SelectPatient = DoctorPatient;
@@ -221,3 +263,7 @@ export type InsertBillingQueue = Omit<BillingQueueItem, 'id' | 'createdAt' | 'up
 export type SelectBillingQueue = BillingQueueItem;
 export type InsertBillingReceipt = Omit<BillingReceipt, 'id' | 'createdAt'>;
 export type SelectBillingReceipt = BillingReceipt;
+export type InsertMedicineBill = Omit<MedicineBill, 'id' | 'createdAt' | 'updatedAt'>;
+export type SelectMedicineBill = MedicineBill;
+export type InsertMedicineAmountMemory = Omit<MedicineAmountMemory, 'id' | 'lastUsedAt'>;
+export type SelectMedicineAmountMemory = MedicineAmountMemory;

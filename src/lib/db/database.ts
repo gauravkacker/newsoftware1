@@ -132,6 +132,8 @@ class LocalDatabase {
     // Billing
     this.store.set('billingQueue', []);
     this.store.set('billingReceipts', []);
+    this.store.set('medicineBills', []);
+    this.store.set('medicineAmountMemory', []);
     
     // Seed default smart parsing rules
     this.seedDefaultSmartParsingRules();
@@ -1581,4 +1583,80 @@ export const billingReceiptDb = {
   update: (id: string, updates: Parameters<typeof db.update>[2]) => db.update('billingReceipts', id, updates),
   markPrinted: (id: string) => db.update('billingReceipts', id, { printedAt: new Date() }),
   markWhatsappSent: (id: string) => db.update('billingReceipts', id, { whatsappSentAt: new Date() })
+};
+
+// ============================================
+// Medicine Bill Operations
+// ============================================
+
+export const medicineBillDb = {
+  getAll: () => db.getAll('medicineBills'),
+  getById: (id: string) => db.getById('medicineBills', id),
+  getByBillingQueueId: (billingQueueId: string) => {
+    const bills = db.getAll('medicineBills');
+    return bills.find((b: unknown) => {
+      const bill = b as { billingQueueId: string };
+      return bill.billingQueueId === billingQueueId;
+    });
+  },
+  getByVisitId: (visitId: string) => {
+    const bills = db.getAll('medicineBills');
+    return bills.filter((b: unknown) => {
+      const bill = b as { visitId: string };
+      return bill.visitId === visitId;
+    }).sort((a, b) => {
+      const billA = a as { createdAt: Date };
+      const billB = b as { createdAt: Date };
+      return new Date(billB.createdAt).getTime() - new Date(billA.createdAt).getTime();
+    });
+  },
+  getByPatientId: (patientId: string) => {
+    const bills = db.getAll('medicineBills');
+    return bills.filter((b: unknown) => {
+      const bill = b as { patientId: string };
+      return bill.patientId === patientId;
+    }).sort((a, b) => {
+      const billA = a as { createdAt: Date };
+      const billB = b as { createdAt: Date };
+      return new Date(billB.createdAt).getTime() - new Date(billA.createdAt).getTime();
+    });
+  },
+  create: (bill: Parameters<typeof db.create>[1]) => db.create('medicineBills', bill),
+  update: (id: string, updates: Parameters<typeof db.update>[2]) => db.update('medicineBills', id, updates),
+  delete: (id: string) => db.delete('medicineBills', id),
+};
+
+// ============================================
+// Medicine Amount Memory Operations
+// ============================================
+
+export const medicineAmountMemoryDb = {
+  getAll: () => db.getAll('medicineAmountMemory'),
+  getByMedicine: (medicine: string, potency?: string) => {
+    const memories = db.getAll('medicineAmountMemory');
+    return memories.find((m: unknown) => {
+      const memory = m as { medicine: string; potency?: string };
+      return memory.medicine.toLowerCase() === medicine.toLowerCase() && 
+             (!potency || memory.potency?.toLowerCase() === potency.toLowerCase());
+    });
+  },
+  create: (memory: Parameters<typeof db.create>[1]) => db.create('medicineAmountMemory', memory),
+  update: (id: string, updates: Parameters<typeof db.update>[2]) => db.update('medicineAmountMemory', id, updates),
+  upsert: (medicine: string, potency: string | undefined, amount: number) => {
+    const existing = medicineAmountMemoryDb.getByMedicine(medicine, potency);
+    if (existing) {
+      db.update('medicineAmountMemory', (existing as { id: string }).id, {
+        amount,
+        lastUsedAt: new Date()
+      });
+    } else {
+      db.create('medicineAmountMemory', {
+        id: `mem-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        medicine,
+        potency,
+        amount,
+        lastUsedAt: new Date()
+      });
+    }
+  }
 };
