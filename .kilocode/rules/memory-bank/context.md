@@ -123,3 +123,4 @@ bun typecheck  # TypeScript checking
 | February 2026 | **Combination Medicine Fix**: Fixed user-created combinations not showing their content in autocomplete - now saves to database and localStorage with content, updated autocomplete to merge content from both sources |
 | February 2026 | **Pharmacy Date Filter**: Added date filter to pharmacy module - shows only today's active and prepared prescriptions by default, with calendar picker to view other dates | |
 | February 2026 | **Bill Creation in Prescription View**: Added 'Create Bill' button in billing prescription popup - allows editing amounts for each medicine, calculates subtotal/discount/tax, print and WhatsApp sharing | |
+| February 2026 | **Save Bill Feature**: Added Save Bill button to save medicine bills to database, View Bill button on billing page patient row, and medicine amount memory that remembers last entered amounts for each medicine | |
