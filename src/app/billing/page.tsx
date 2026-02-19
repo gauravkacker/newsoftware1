@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -59,8 +59,9 @@ export default function BillingPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('pending');
   
-  // Date filter state
+  // Date filter state - use ref to track current date for interval callback
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const selectedDateRef = useRef<Date>(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   
   // Fee editing state
@@ -102,8 +103,9 @@ export default function BillingPage() {
     // Get all items from billing queue
     const allItems = billingQueueDb.getAll() as BillingQueueItem[];
     
-    // Filter by selected date
-    const selectedDateStr = selectedDate.toDateString();
+    // Filter by selected date (use ref for current value)
+    const currentDate = selectedDateRef.current;
+    const selectedDateStr = currentDate.toDateString();
     const filteredByDate = allItems.filter((item) => {
       const itemDate = item.createdAt instanceof Date ? item.createdAt : new Date(item.createdAt);
       return itemDate.toDateString() === selectedDateStr;
@@ -207,7 +209,7 @@ export default function BillingPage() {
     setQueueItems(enrichItems(sortByDateAsc(pending)));
     setCompletedItems(enrichItems(sortByDateDesc(completed)));
     setIsLoading(false);
-  }, [selectedDate]);
+  }, []);
 
   // Check pharmacy queue for prepared items and add to billing
   const checkPharmacyQueue = useCallback(() => {
@@ -301,17 +303,19 @@ export default function BillingPage() {
     loadQueue();
   }, [loadQueue]);
 
-  // Initial load
+  // Initial load and interval for pharmacy queue check
   useEffect(() => {
-    // Initial load
-    loadQueue();
-    
     // Set up interval to check for new items from pharmacy
     const interval = setInterval(() => {
       checkPharmacyQueue();
     }, 3000);
     
     return () => clearInterval(interval);
+  }, [checkPharmacyQueue]);
+
+  // Initial load on mount
+  useEffect(() => {
+    loadQueue();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -614,9 +618,11 @@ Get well soon.
   // Handle date change
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newDate = new Date(e.target.value);
+    selectedDateRef.current = newDate; // Update ref first
     setSelectedDate(newDate);
     setShowDatePicker(false);
     setSelectedItem(null);
+    loadQueue(); // Immediately load data for new date
   };
 
   // Check if date is today
@@ -678,8 +684,11 @@ Get well soon.
                 {!isToday(selectedDate) && (
                   <button
                     onClick={() => {
-                      setSelectedDate(new Date());
+                      const today = new Date();
+                      selectedDateRef.current = today;
+                      setSelectedDate(today);
                       setSelectedItem(null);
+                      loadQueue();
                     }}
                     className="text-sm text-blue-600 hover:text-blue-700"
                   >
