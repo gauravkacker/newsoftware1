@@ -87,6 +87,24 @@ export default function BillingPage() {
   const [viewingPrescriptions, setViewingPrescriptions] = useState<DoctorPrescription[]>([]);
   const [viewingPatient, setViewingPatient] = useState<PatientInfo | null>(null);
   
+  // Bill creation state
+  const [isBillMode, setIsBillMode] = useState(false);
+  const [billItems, setBillItems] = useState<Array<{
+    id: string;
+    medicine: string;
+    potency?: string;
+    quantity: number;
+    dosePattern?: string;
+    frequency?: string;
+    duration?: string;
+    isCombination?: boolean;
+    combinationContent?: string;
+    amount: number;
+  }>>([]);
+  const [billDiscount, setBillDiscount] = useState(0);
+  const [billTax, setBillTax] = useState(0);
+  const [billNotes, setBillNotes] = useState('');
+  
   // Fee history state
   const [showFeeHistory, setShowFeeHistory] = useState(false);
   const [feeHistoryPatient, setFeeHistoryPatient] = useState<PatientInfo | null>(null);
@@ -406,7 +424,180 @@ export default function BillingPage() {
   const handleViewPrescription = (item: BillingQueueItemWithDetails) => {
     setViewingPrescriptions(item.prescriptions || []);
     setViewingPatient(item.patient || null);
+    setIsBillMode(false);
+    setBillItems((item.prescriptions || []).map(rx => ({
+      id: rx.id || generateId(),
+      medicine: rx.medicine,
+      potency: rx.potency,
+      quantity: typeof rx.quantity === 'string' ? parseInt(rx.quantity, 10) || 1 : rx.quantity || 1,
+      dosePattern: rx.dosePattern,
+      frequency: rx.frequency,
+      duration: rx.duration,
+      isCombination: rx.isCombination,
+      combinationContent: rx.combinationContent,
+      amount: 0
+    })));
+    setBillDiscount(0);
+    setBillTax(0);
+    setBillNotes('');
     setShowPrescriptionPopup(true);
+  };
+  
+  // Enter bill creation mode
+  const handleCreateBill = () => {
+    setIsBillMode(true);
+  };
+  
+  // Update bill item amount
+  const handleBillItemAmountChange = (index: number, amount: number) => {
+    setBillItems(prev => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], amount };
+      return updated;
+    });
+  };
+  
+  // Calculate bill totals
+  const getBillSubtotal = () => {
+    return billItems.reduce((sum, item) => sum + (item.amount || 0), 0);
+  };
+  
+  const getBillDiscountAmount = () => {
+    return (getBillSubtotal() * billDiscount) / 100;
+  };
+  
+  const getBillTaxAmount = () => {
+    return ((getBillSubtotal() - getBillDiscountAmount()) * billTax) / 100;
+  };
+  
+  const getBillTotal = () => {
+    return getBillSubtotal() - getBillDiscountAmount() + getBillTaxAmount();
+  };
+  
+  // Print bill
+  const handlePrintBill = () => {
+    if (!viewingPatient) return;
+    
+    const printContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Bill - ${viewingPatient.firstName} ${viewingPatient.lastName}</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 20px; max-width: 500px; margin: 0 auto; }
+          .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 15px; }
+          .bill-title { font-size: 18px; font-weight: bold; }
+          .patient-info { margin-bottom: 15px; }
+          .patient-info div { margin: 5px 0; }
+          .items { border-top: 1px solid #ccc; border-bottom: 1px solid #ccc; padding: 10px 0; margin: 10px 0; }
+          .item { display: flex; justify-content: space-between; margin: 8px 0; font-size: 14px; }
+          .item-name { flex: 1; }
+          .item-qty { width: 60px; text-align: center; }
+          .item-amount { width: 80px; text-align: right; }
+          .totals { margin-top: 15px; }
+          .totals div { display: flex; justify-content: space-between; margin: 5px 0; }
+          .grand-total { font-weight: bold; font-size: 16px; border-top: 1px solid #000; padding-top: 8px; margin-top: 8px; }
+          .footer { text-align: center; margin-top: 20px; font-size: 12px; color: #666; }
+          @media print { body { padding: 0; } }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h2 style="margin: 0;">HomeoPMS Clinic</h2>
+          <p style="margin: 5px 0;">Medicine Bill</p>
+          <div class="bill-title">Date: ${formatDate(new Date())}</div>
+        </div>
+        <div class="patient-info">
+          <div><strong>Patient:</strong> ${viewingPatient.firstName} ${viewingPatient.lastName}</div>
+          <div><strong>Regd No:</strong> ${viewingPatient.registrationNumber}</div>
+          <div><strong>Mobile:</strong> ${viewingPatient.mobileNumber}</div>
+        </div>
+        <div class="items">
+          <div class="item" style="font-weight: bold; border-bottom: 1px solid #eee; padding-bottom: 5px;">
+            <span class="item-name">Medicine</span>
+            <span class="item-qty">Qty</span>
+            <span class="item-amount">Amount</span>
+          </div>
+          ${billItems.filter(item => item.amount > 0).map(item => `
+            <div class="item">
+              <span class="item-name">${item.medicine}${item.potency ? ` (${item.potency})` : ''}</span>
+              <span class="item-qty">${item.quantity}</span>
+              <span class="item-amount">${formatCurrency(item.amount)}</span>
+            </div>
+          `).join('')}
+        </div>
+        <div class="totals">
+          <div>
+            <span>Subtotal:</span>
+            <span>${formatCurrency(getBillSubtotal())}</span>
+          </div>
+          ${billDiscount > 0 ? `
+            <div style="color: green;">
+              <span>Discount (${billDiscount}%):</span>
+              <span>-${formatCurrency(getBillDiscountAmount())}</span>
+            </div>
+          ` : ''}
+          ${billTax > 0 ? `
+            <div>
+              <span>Tax (${billTax}%):</span>
+              <span>+${formatCurrency(getBillTaxAmount())}</span>
+            </div>
+          ` : ''}
+          <div class="grand-total">
+            <span>Grand Total:</span>
+            <span>${formatCurrency(getBillTotal())}</span>
+          </div>
+        </div>
+        ${billNotes ? `<div style="margin-top: 15px; font-size: 12px;"><strong>Notes:</strong> ${billNotes}</div>` : ''}
+        <div class="footer">
+          <p>Thank you for your visit!</p>
+          <p>Get well soon.</p>
+        </div>
+        <script>window.print();</script>
+      </body>
+      </html>
+    `;
+    
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(printContent);
+      printWindow.document.close();
+    }
+  };
+  
+  // Send bill via WhatsApp
+  const handleWhatsAppBill = () => {
+    if (!viewingPatient) return;
+    
+    const phone = viewingPatient.mobileNumber?.replace(/[^0-9]/g, '');
+    
+    const itemsText = billItems
+      .filter(item => item.amount > 0)
+      .map(item => `• ${item.medicine}${item.potency ? ` (${item.potency})` : ''} - Qty: ${item.quantity} - ${formatCurrency(item.amount)}`)
+      .join('\n');
+    
+    const message = `
+*HomeoPMS Clinic - Medicine Bill*
+----------------------------------
+Date: ${formatDate(new Date())}
+
+*Patient:* ${viewingPatient.firstName} ${viewingPatient.lastName}
+*Regd No:* ${viewingPatient.registrationNumber}
+
+*Items:*
+${itemsText}
+
+*Subtotal:* ${formatCurrency(getBillSubtotal())}
+${billDiscount > 0 ? `*Discount (${billDiscount}%):* -${formatCurrency(getBillDiscountAmount())}\n` : ''}${billTax > 0 ? `*Tax (${billTax}%):* +${formatCurrency(getBillTaxAmount())}\n` : ''}
+*Grand Total:* ${formatCurrency(getBillTotal())}
+${billNotes ? `\n*Notes:* ${billNotes}` : ''}
+
+Thank you for your visit!
+Get well soon.
+    `.trim();
+    
+    const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank');
   };
 
   // View fee history
@@ -981,25 +1172,137 @@ Get well soon.
       {/* Prescription View Popup */}
       {showPrescriptionPopup && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <Card className="w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+          <Card className="w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
             <div className="p-4 border-b border-gray-200 flex justify-between items-center">
               <div>
-                <h2 className="text-xl font-bold">Prescription</h2>
+                <h2 className="text-xl font-bold">{isBillMode ? 'Create Bill' : 'Prescription'}</h2>
                 {viewingPatient && (
                   <p className="text-sm text-gray-500">
                     {viewingPatient.firstName} {viewingPatient.lastName} - {viewingPatient.registrationNumber}
                   </p>
                 )}
               </div>
-              <Button variant="outline" onClick={() => setShowPrescriptionPopup(false)}>
+              <Button variant="outline" onClick={() => {
+                setShowPrescriptionPopup(false);
+                setIsBillMode(false);
+              }}>
                 Close
               </Button>
             </div>
             
             <div className="p-4 overflow-y-auto flex-1">
-              {viewingPrescriptions.length === 0 ? (
+              {billItems.length === 0 ? (
                 <p className="text-gray-500 text-center py-8">No prescriptions found.</p>
+              ) : isBillMode ? (
+                /* Bill Creation Mode */
+                <div className="space-y-4">
+                  <table className="w-full">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-sm font-medium text-gray-500">Medicine</th>
+                        <th className="px-4 py-2 text-left text-sm font-medium text-gray-500">Potency</th>
+                        <th className="px-4 py-2 text-center text-sm font-medium text-gray-500">Qty</th>
+                        <th className="px-4 py-2 text-left text-sm font-medium text-gray-500">Dose</th>
+                        <th className="px-4 py-2 text-right text-sm font-medium text-gray-500">Amount (₹)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {billItems.map((item, index) => (
+                        <tr key={item.id || index}>
+                          <td className="px-4 py-2">
+                            <div className="font-medium">{item.medicine}</div>
+                            {item.isCombination && (
+                              <div className="text-xs text-gray-500">{item.combinationContent}</div>
+                            )}
+                          </td>
+                          <td className="px-4 py-2">{item.potency || '-'}</td>
+                          <td className="px-4 py-2 text-center">{item.quantity}</td>
+                          <td className="px-4 py-2">
+                            {item.dosePattern || '-'}
+                            {item.frequency && <span className="text-xs text-gray-500"> ({item.frequency})</span>}
+                          </td>
+                          <td className="px-4 py-2">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={item.amount || ''}
+                              onChange={(e) => handleBillItemAmountChange(index, parseFloat(e.target.value) || 0)}
+                              placeholder="0.00"
+                              className="w-24 px-2 py-1 border border-gray-300 rounded text-right focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  
+                  {/* Bill Summary */}
+                  <div className="border-t border-gray-200 pt-4 mt-4">
+                    <div className="flex justify-end">
+                      <div className="w-64 space-y-2">
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Subtotal:</span>
+                          <span className="font-medium">{formatCurrency(getBillSubtotal())}</span>
+                        </div>
+                        
+                        <div className="flex justify-between items-center">
+                          <span className="text-gray-600">Discount (%):</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            value={billDiscount}
+                            onChange={(e) => setBillDiscount(parseFloat(e.target.value) || 0)}
+                            className="w-20 px-2 py-1 border border-gray-300 rounded text-right focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                        {billDiscount > 0 && (
+                          <div className="flex justify-between text-green-600">
+                            <span>Discount Amount:</span>
+                            <span>-{formatCurrency(getBillDiscountAmount())}</span>
+                          </div>
+                        )}
+                        
+                        <div className="flex justify-between items-center">
+                          <span className="text-gray-600">Tax (%):</span>
+                          <input
+                            type="number"
+                            min="0"
+                            value={billTax}
+                            onChange={(e) => setBillTax(parseFloat(e.target.value) || 0)}
+                            className="w-20 px-2 py-1 border border-gray-300 rounded text-right focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                        {billTax > 0 && (
+                          <div className="flex justify-between">
+                            <span>Tax Amount:</span>
+                            <span>+{formatCurrency(getBillTaxAmount())}</span>
+                          </div>
+                        )}
+                        
+                        <div className="flex justify-between font-bold text-lg border-t pt-2">
+                          <span>Grand Total:</span>
+                          <span>{formatCurrency(getBillTotal())}</span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Notes */}
+                    <div className="mt-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                      <textarea
+                        value={billNotes}
+                        onChange={(e) => setBillNotes(e.target.value)}
+                        rows={2}
+                        placeholder="Add any notes..."
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+                </div>
               ) : (
+                /* View Prescription Mode */
                 <table className="w-full">
                   <thead className="bg-gray-50">
                     <tr>
@@ -1011,21 +1314,21 @@ Get well soon.
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {viewingPrescriptions.map((rx, index) => (
-                      <tr key={rx.id || index}>
+                    {billItems.map((item, index) => (
+                      <tr key={item.id || index}>
                         <td className="px-4 py-2">
-                          <div className="font-medium">{rx.medicine}</div>
-                          {rx.isCombination && (
-                            <div className="text-xs text-gray-500">{rx.combinationContent}</div>
+                          <div className="font-medium">{item.medicine}</div>
+                          {item.isCombination && (
+                            <div className="text-xs text-gray-500">{item.combinationContent}</div>
                           )}
                         </td>
-                        <td className="px-4 py-2">{rx.potency || '-'}</td>
-                        <td className="px-4 py-2">{rx.quantity}</td>
+                        <td className="px-4 py-2">{item.potency || '-'}</td>
+                        <td className="px-4 py-2">{item.quantity}</td>
                         <td className="px-4 py-2">
-                          {rx.dosePattern || '-'}
-                          {rx.frequency && <span className="text-xs text-gray-500"> ({rx.frequency})</span>}
+                          {item.dosePattern || '-'}
+                          {item.frequency && <span className="text-xs text-gray-500"> ({item.frequency})</span>}
                         </td>
-                        <td className="px-4 py-2">{rx.duration || '-'}</td>
+                        <td className="px-4 py-2">{item.duration || '-'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1034,18 +1337,34 @@ Get well soon.
             </div>
             
             <div className="p-4 border-t border-gray-200 flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setShowPrescriptionPopup(false)}>
-                Close
-              </Button>
-              <Button variant="outline" onClick={handleWhatsAppReceipt}>
-                WhatsApp
-              </Button>
-              <Button variant="outline" onClick={handlePrintReceipt}>
-                Print
-              </Button>
-              <Button variant="outline" onClick={handleDownloadPDF}>
-                Download PDF
-              </Button>
+              {isBillMode ? (
+                <>
+                  <Button variant="outline" onClick={() => setIsBillMode(false)}>
+                    Back to Prescription
+                  </Button>
+                  <Button variant="outline" onClick={handlePrintBill}>
+                    Print Bill
+                  </Button>
+                  <Button variant="outline" onClick={handleWhatsAppBill}>
+                    WhatsApp
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button variant="primary" onClick={handleCreateBill}>
+                    Create Bill
+                  </Button>
+                  <Button variant="outline" onClick={handleWhatsAppReceipt}>
+                    WhatsApp
+                  </Button>
+                  <Button variant="outline" onClick={handlePrintReceipt}>
+                    Print
+                  </Button>
+                  <Button variant="outline" onClick={handleDownloadPDF}>
+                    Download PDF
+                  </Button>
+                </>
+              )}
             </div>
           </Card>
         </div>
