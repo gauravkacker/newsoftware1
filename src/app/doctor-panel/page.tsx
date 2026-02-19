@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+export const dynamic = 'force-dynamic';
+
+import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Button } from '@/components/ui/Button';
@@ -331,7 +333,7 @@ function createRowFromParsed(parsed: ParsedPrescription): PrescriptionRow {
 }
 
 // Main Component
-export default function DoctorPanelPage() {
+function DoctorPanelContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const patientIdFromUrl = searchParams.get('patientId');
@@ -3667,5 +3669,14 @@ Dr. Homeopathic Clinic`);
         </div>
       )}
     </div>
+  );
+}
+
+// Wrapper component with Suspense for useSearchParams
+export default function DoctorPanelPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><span className="text-lg">Loading...</span></div>}>
+      <DoctorPanelContent />
+    </Suspense>
   );
 }
