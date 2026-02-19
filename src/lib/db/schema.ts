@@ -220,7 +220,8 @@ export interface MedicineBillItem {
   prescriptionId: string;
   medicine: string;
   potency?: string;
-  quantity: number;
+  quantityDisplay?: string; // Original quantity string like "2dr"
+  quantity: number; // Number of bottles for billing
   dosePattern?: string;
   frequency?: string;
   duration?: string;

@@ -95,7 +95,8 @@ export default function BillingPage() {
     prescriptionId: string;
     medicine: string;
     potency?: string;
-    quantity: number;
+    quantityDisplay: string; // Original quantity string like "2dr"
+    quantity: number; // Number of bottles for billing
     dosePattern?: string;
     frequency?: string;
     duration?: string;
@@ -445,7 +446,8 @@ export default function BillingPage() {
         prescriptionId: billItem.prescriptionId,
         medicine: billItem.medicine,
         potency: billItem.potency,
-        quantity: billItem.quantity,
+        quantityDisplay: billItem.quantityDisplay || '', // Original quantity string
+        quantity: billItem.quantity, // Number of bottles
         dosePattern: billItem.dosePattern,
         frequency: billItem.frequency,
         duration: billItem.duration,
@@ -469,7 +471,8 @@ export default function BillingPage() {
           prescriptionId: rx.id || generateId(),
           medicine: rx.medicine,
           potency: rx.potency,
-          quantity: typeof rx.quantity === 'string' ? parseInt(rx.quantity, 10) || 1 : rx.quantity || 1,
+          quantityDisplay: rx.quantity || '', // Original quantity string like "2dr"
+          quantity: rx.bottles || 1, // Number of bottles for billing
           dosePattern: rx.dosePattern,
           frequency: rx.frequency,
           duration: rx.duration,
@@ -564,7 +567,7 @@ export default function BillingPage() {
           ${billItems.filter(item => item.amount > 0).map(item => `
             <div class="item">
               <span class="item-name">${item.medicine}${item.potency ? ` (${item.potency})` : ''}</span>
-              <span class="item-qty">${item.quantity}</span>
+              <span class="item-qty">${item.quantityDisplay || item.quantity}</span>
               <span class="item-amount">${formatCurrency(item.amount)}</span>
             </div>
           `).join('')}
@@ -616,7 +619,7 @@ export default function BillingPage() {
     
     const itemsText = billItems
       .filter(item => item.amount > 0)
-      .map(item => `• ${item.medicine}${item.potency ? ` (${item.potency})` : ''} - Qty: ${item.quantity} - ${formatCurrency(item.amount)}`)
+      .map(item => `• ${item.medicine}${item.potency ? ` (${item.potency})` : ''} - Qty: ${item.quantityDisplay || item.quantity} - ${formatCurrency(item.amount)}`)
       .join('\n');
     
     const message = `
@@ -651,7 +654,8 @@ Get well soon.
       prescriptionId: item.prescriptionId,
       medicine: item.medicine,
       potency: item.potency,
-      quantity: item.quantity,
+      quantityDisplay: item.quantityDisplay, // Original quantity string like "2dr"
+      quantity: item.quantity, // Number of bottles
       dosePattern: item.dosePattern,
       frequency: item.frequency,
       duration: item.duration,
@@ -1437,7 +1441,7 @@ Get well soon.
                           )}
                         </td>
                         <td className="px-4 py-2">{item.potency || '-'}</td>
-                        <td className="px-4 py-2">{item.quantity}</td>
+                        <td className="px-4 py-2">{item.quantityDisplay || item.quantity}</td>
                         <td className="px-4 py-2">
                           {item.dosePattern || '-'}
                           {item.frequency && <span className="text-xs text-gray-500"> ({item.frequency})</span>}
@@ -1632,7 +1636,7 @@ Get well soon.
                         )}
                       </td>
                       <td className="px-4 py-2">{item.potency || '-'}</td>
-                      <td className="px-4 py-2 text-center">{item.quantity}</td>
+                      <td className="px-4 py-2 text-center">{item.quantityDisplay || item.quantity}</td>
                       <td className="px-4 py-2 text-right">{formatCurrency(item.amount)}</td>
                     </tr>
                   ))}
@@ -1715,7 +1719,7 @@ Get well soon.
                       ${viewingMedicineBill.items.filter(item => item.amount > 0).map(item => `
                         <div class="item">
                           <span>${item.medicine}${item.potency ? ` (${item.potency})` : ''}</span>
-                          <span>Qty: ${item.quantity}</span>
+                          <span>Qty: ${item.quantityDisplay || item.quantity}</span>
                           <span>${formatCurrency(item.amount)}</span>
                         </div>
                       `).join('')}
