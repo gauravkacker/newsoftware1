@@ -700,6 +700,7 @@ Get well soon.
     const bill = medicineBillDb.getByBillingQueueId(item.id) as MedicineBill | undefined;
     if (bill) {
       setViewingMedicineBill(bill);
+      setViewingBillingItem(item); // Store for edit functionality
       setShowViewBillPopup(true);
     }
   };
@@ -1468,7 +1469,7 @@ Get well soon.
               ) : (
                 <>
                   <Button variant="primary" onClick={handleCreateBill}>
-                    {savedMedicineBill ? 'Edit Bill' : 'Create Bill'}
+                    Create Bill
                   </Button>
                   <Button variant="outline" onClick={handleWhatsAppReceipt}>
                     WhatsApp
@@ -1675,6 +1676,16 @@ Get well soon.
             <div className="p-4 border-t border-gray-200 flex justify-end gap-2">
               <Button variant="outline" onClick={() => setShowViewBillPopup(false)}>
                 Close
+              </Button>
+              <Button variant="primary" onClick={() => {
+                // Open the prescription popup in bill edit mode
+                if (viewingBillingItem) {
+                  setShowViewBillPopup(false);
+                  handleViewPrescription(viewingBillingItem);
+                  setIsBillMode(true);
+                }
+              }}>
+                Edit Bill
               </Button>
               <Button variant="outline" onClick={() => {
                 // Print the saved bill
