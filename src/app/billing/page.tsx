@@ -59,6 +59,10 @@ export default function BillingPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('pending');
   
+  // Date filter state
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  
   // Fee editing state
   const [showFeePopup, setShowFeePopup] = useState(false);
   const [editingFee, setEditingFee] = useState<{
@@ -98,8 +102,15 @@ export default function BillingPage() {
     // Get all items from billing queue
     const allItems = billingQueueDb.getAll() as BillingQueueItem[];
     
-    // Update fees from appointments for pending items
-    allItems.forEach((item) => {
+    // Filter by selected date
+    const selectedDateStr = selectedDate.toDateString();
+    const filteredByDate = allItems.filter((item) => {
+      const itemDate = item.createdAt instanceof Date ? item.createdAt : new Date(item.createdAt);
+      return itemDate.toDateString() === selectedDateStr;
+    });
+    
+    // Update fees from appointments for pending items (only for today's items)
+    filteredByDate.forEach((item) => {
       if (item.status === 'pending') {
         let correctFee = item.feeAmount;
         let correctFeeType = item.feeType;
@@ -154,8 +165,11 @@ export default function BillingPage() {
       }
     });
     
-    // Re-fetch items after potential updates
-    const updatedItems = billingQueueDb.getAll() as BillingQueueItem[];
+    // Re-fetch items after potential updates (still filter by date)
+    const updatedItems = (billingQueueDb.getAll() as BillingQueueItem[]).filter((item) => {
+      const itemDate = item.createdAt instanceof Date ? item.createdAt : new Date(item.createdAt);
+      return itemDate.toDateString() === selectedDateStr;
+    });
     
     // Separate pending and completed items
     const pending = updatedItems.filter(
@@ -193,7 +207,7 @@ export default function BillingPage() {
     setQueueItems(enrichItems(sortByDateAsc(pending)));
     setCompletedItems(enrichItems(sortByDateDesc(completed)));
     setIsLoading(false);
-  }, []);
+  }, [selectedDate]);
 
   // Check pharmacy queue for prepared items and add to billing
   const checkPharmacyQueue = useCallback(() => {
@@ -587,6 +601,35 @@ Get well soon.
     loadQueue();
   };
 
+  // Reopen completed billing
+  const handleReopen = (item: BillingQueueItemWithDetails) => {
+    // Update billing queue - set status back to paid (receipt generated but not completed)
+    billingQueueDb.update(item.id, {
+      status: 'paid'
+    });
+    
+    loadQueue();
+  };
+
+  // Handle date change
+  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newDate = new Date(e.target.value);
+    setSelectedDate(newDate);
+    setShowDatePicker(false);
+    setSelectedItem(null);
+  };
+
+  // Check if date is today
+  const isToday = (date: Date): boolean => {
+    const today = new Date();
+    return date.toDateString() === today.toDateString();
+  };
+
+  // Format date for input
+  const formatDateForInput = (date: Date): string => {
+    return date.toISOString().split('T')[0];
+  };
+
   // Get status badge color
   const getStatusColor = (status: string): "success" | "warning" | "danger" | "info" | "default" => {
     switch (status) {
@@ -614,6 +657,46 @@ Get well soon.
               <p className="text-gray-600">Manage patient billing and receipts</p>
             </div>
             <div className="flex items-center gap-4">
+              {/* Date Selector */}
+              <div className="flex items-center gap-2">
+                {isToday(selectedDate) ? (
+                  <span className="text-sm font-medium text-gray-700">Today</span>
+                ) : (
+                  <span className="text-sm font-medium text-gray-700">
+                    {selectedDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  </span>
+                )}
+                <button
+                  onClick={() => setShowDatePicker(!showDatePicker)}
+                  className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
+                  title="Select date"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                </button>
+                {!isToday(selectedDate) && (
+                  <button
+                    onClick={() => {
+                      setSelectedDate(new Date());
+                      setSelectedItem(null);
+                    }}
+                    className="text-sm text-blue-600 hover:text-blue-700"
+                  >
+                    Go to Today
+                  </button>
+                )}
+              </div>
+              {showDatePicker && (
+                <div className="absolute right-24 top-20 bg-white border border-gray-200 rounded-lg shadow-lg p-4 z-10">
+                  <input
+                    type="date"
+                    value={formatDateForInput(selectedDate)}
+                    onChange={handleDateChange}
+                    className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+              )}
               <Badge variant="info">{queueItems.length} Pending</Badge>
               <Button onClick={loadQueue} variant="outline">
                 Refresh
@@ -766,6 +849,15 @@ Get well soon.
                               Complete
                             </Button>
                           </>
+                        )}
+                        {item.status === 'completed' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleReopen(item)}
+                          >
+                            Reopen
+                          </Button>
                         )}
                       </div>
                     </div>
