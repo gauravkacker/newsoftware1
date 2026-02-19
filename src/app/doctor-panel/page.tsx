@@ -1510,6 +1510,26 @@ export default function DoctorPanelPage() {
       });
     }
     
+    // Sync fee changes to billing queue if patient is already there
+    const existingBillingItems = billingQueueDb.getAll() as any[];
+    const patientBillingItem = existingBillingItems.find(
+      (item) => item.patientId === patient.id && 
+                (item.status === 'pending' || item.status === 'paid') &&
+                (item.appointmentId === todayAppointment?.id || 
+                 (todayAppointment && new Date(item.createdAt).toDateString() === new Date().toDateString()))
+    );
+    
+    if (patientBillingItem) {
+      billingQueueDb.update(patientBillingItem.id, {
+        feeAmount: feeAmountNum,
+        feeType: feeType,
+        netAmount: feeAmountNum - (patientBillingItem.discountAmount || 0),
+        paymentStatus: paymentStatus,
+        updatedAt: new Date(),
+      });
+      console.log('[DoctorPanel] Synced fee to billing queue:', patientBillingItem.id);
+    }
+    
     // Update the visible fee info immediately
     setCurrentAppointmentFee(prev => prev ? {
       ...prev,
@@ -1742,6 +1762,26 @@ export default function DoctorPanelPage() {
           feeType: feeType,
         });
       }
+    }
+    
+    // Sync fee changes to billing queue if patient is already there
+    const existingBillingItems = billingQueueDb.getAll() as any[];
+    const patientBillingItem = existingBillingItems.find(
+      (item) => item.patientId === patient.id && 
+                (item.status === 'pending' || item.status === 'paid') &&
+                (item.appointmentId === currentAppointmentFee?.appointmentId || 
+                 new Date(item.createdAt).toDateString() === new Date().toDateString())
+    );
+    
+    if (patientBillingItem) {
+      billingQueueDb.update(patientBillingItem.id, {
+        feeAmount: feeAmountNum,
+        feeType: feeType,
+        netAmount: feeAmountNum - (patientBillingItem.discountAmount || 0),
+        paymentStatus: paymentStatus,
+        updatedAt: new Date(),
+      });
+      console.log('[DoctorPanel] Synced fee to billing queue on end consultation:', patientBillingItem.id);
     }
 
     // Mark consultation as ended and show preview popup

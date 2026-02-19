@@ -5,7 +5,7 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
-import { billingQueueDb, billingReceiptDb, patientDb, appointmentDb, feeHistoryDb } from '@/lib/db/database';
+import { billingQueueDb, billingReceiptDb, patientDb, appointmentDb, feeHistoryDb, db } from '@/lib/db/database';
 import { pharmacyQueueDb, doctorPrescriptionDb, doctorVisitDb } from '@/lib/db/doctor-panel';
 import type { PharmacyQueueItem } from '@/lib/db/schema';
 import type { BillingQueueItem, BillingReceipt, BillingReceiptItem } from '@/lib/db/schema';
@@ -356,6 +356,29 @@ export default function BillingPage() {
       paymentMethod: editingFee.paymentMethod,
       notes: editingFee.notes
     });
+    
+    // Sync fee changes back to appointment
+    if (selectedItem.appointmentId) {
+      appointmentDb.update(selectedItem.appointmentId, {
+        feeAmount: editingFee.feeAmount,
+        feeType: selectedItem.feeType,
+      });
+      console.log('[Billing] Synced fee back to appointment:', selectedItem.appointmentId);
+    }
+    
+    // Also update the fees table if there's a fee record
+    const feeRecords = (db.getAll('fees') || []) as any[];
+    const relatedFee = feeRecords.find((f) => 
+      f.patientId === selectedItem.patientId && 
+      f.visitId === selectedItem.visitId
+    );
+    if (relatedFee) {
+      db.update('fees', relatedFee.id, {
+        amount: editingFee.feeAmount,
+        updatedAt: new Date(),
+      });
+      console.log('[Billing] Synced fee to fees table:', relatedFee.id);
+    }
     
     setShowFeePopup(false);
     loadQueue();
