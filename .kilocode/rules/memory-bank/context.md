@@ -121,3 +121,4 @@ bun typecheck  # TypeScript checking
 | February 2026 | **Added Billing Module**: Complete billing workflow with fee editing, receipts, fee history, WhatsApp/Print/PDF options, and integration with pharmacy and doctor panel |
 | February 2026 | **Billing Duplicate Fix**: Fixed issue where patients appeared in both pending and completed tabs after clicking complete - changed billing check to look for existing items by visitId only (not status) |
 | February 2026 | **Combination Medicine Fix**: Fixed user-created combinations not showing their content in autocomplete - now saves to database and localStorage with content, updated autocomplete to merge content from both sources |
+| February 2026 | **Pharmacy Date Filter**: Added date filter to pharmacy module - shows only today's active and prepared prescriptions by default, with calendar picker to view other dates | |
