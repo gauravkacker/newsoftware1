@@ -519,31 +519,71 @@ function DoctorPanelContent() {
     if (typeof window === 'undefined') return [];
     try {
       const data = localStorage.getItem(COMBINATION_NAMES_KEY);
-      return data ? JSON.parse(data) : [];
+      if (data) {
+        const parsed = JSON.parse(data);
+        // Support both old format (string[]) and new format ({name, content}[])
+        if (parsed.length > 0 && typeof parsed[0] === 'object') {
+          return parsed.map((c: { name: string }) => c.name);
+        }
+        return parsed;
+      }
+      return [];
     } catch {
       return [];
     }
   };
   
-  // Save a combination name for autocomplete
-  const saveCombinationName = (name: string) => {
-    if (typeof window === 'undefined' || !name.trim()) return;
-    const comboNames = getCombinationNames();
-    const lowerName = name.toLowerCase().trim();
-    if (!comboNames.some(n => n.toLowerCase() === lowerName)) {
-      comboNames.push(name.trim());
-      localStorage.setItem(COMBINATION_NAMES_KEY, JSON.stringify(comboNames));
+  // Get saved combinations with content
+  const getCombinationsWithContent = (): { name: string; content: string }[] => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const data = localStorage.getItem(COMBINATION_NAMES_KEY);
+      if (data) {
+        const parsed = JSON.parse(data);
+        // Support both old format (string[]) and new format ({name, content}[])
+        if (parsed.length > 0 && typeof parsed[0] === 'object') {
+          return parsed;
+        }
+        // Old format - convert to new format with empty content
+        return parsed.map((name: string) => ({ name, content: '' }));
+      }
+      return [];
+    } catch {
+      return [];
     }
+  };
+  
+  // Save a combination name and content for autocomplete
+  const saveCombinationName = (name: string, content: string = '') => {
+    if (typeof window === 'undefined' || !name.trim()) return;
+    const combos = getCombinationsWithContent();
+    const lowerName = name.toLowerCase().trim();
+    const existingIndex = combos.findIndex(c => c.name.toLowerCase() === lowerName);
+    
+    if (existingIndex >= 0) {
+      // Update existing combination with new content
+      combos[existingIndex] = { name: name.trim(), content };
+    } else {
+      // Add new combination
+      combos.push({ name: name.trim(), content });
+    }
+    localStorage.setItem(COMBINATION_NAMES_KEY, JSON.stringify(combos));
   };
   
   // Get all medicines for autocomplete (common + custom + combinations from both localStorage and database)
   const getAllMedicinesForAutocomplete = (query: string): {name: string; content?: string}[] => {
     const customMeds = getCustomMedicines();
-    const comboNames = getCombinationNames();
+    const localStorageCombos = getCombinationsWithContent();
     
-    // Build combination list with content from database
-    const dbComboMap = new Map(dbCombinations.map(c => [c.name, c.content]));
-    const allComboNames = [...new Set([...dbComboMap.keys(), ...comboNames])];
+    // Build combination list with content from database first, then localStorage as fallback
+    const dbComboMap = new Map(dbCombinations.map(c => [c.name.toLowerCase(), c.content]));
+    const localStorageComboMap = new Map(localStorageCombos.map(c => [c.name.toLowerCase(), c.content]));
+    
+    // Merge all combination names (database takes priority)
+    const allComboNames = [...new Set([
+      ...dbCombinations.map(c => c.name),
+      ...localStorageCombos.map(c => c.name)
+    ])]; 
     
     const filteredCustom = customMeds.filter(m => 
       m.toLowerCase().includes(query.toLowerCase())
@@ -551,7 +591,11 @@ function DoctorPanelContent() {
     
     const filteredCombos = allComboNames.filter(c => 
       c.toLowerCase().includes(query.toLowerCase())
-    ).map(c => ({ name: c, content: dbComboMap.get(c) || '' }));
+    ).map(c => {
+      // Get content from database first, then localStorage
+      const content = dbComboMap.get(c.toLowerCase()) || localStorageComboMap.get(c.toLowerCase()) || '';
+      return { name: c, content };
+    });
     
     const filteredCommon = commonMedicines.filter(m => 
       m.toLowerCase().includes(query.toLowerCase())
@@ -1124,11 +1168,22 @@ function DoctorPanelContent() {
       setSelectedSuggestionIndex(-1);
     } else {
       // Show all medicines when field is empty (including database combinations with content)
-      const dbComboMap = new Map(dbCombinations.map(c => [c.name, c.content]));
-      const allComboNames = [...new Set([...dbComboMap.keys(), ...getCombinationNames()])];
+      const localStorageCombos = getCombinationsWithContent();
+      const dbComboMap = new Map(dbCombinations.map(c => [c.name.toLowerCase(), c.content]));
+      const localStorageComboMap = new Map(localStorageCombos.map(c => [c.name.toLowerCase(), c.content]));
+      
+      // Merge all combination names (database takes priority for content)
+      const allComboNames = [...new Set([
+        ...dbCombinations.map(c => c.name),
+        ...localStorageCombos.map(c => c.name)
+      ])]; 
+      
       const allMeds: {name: string; content?: string}[] = [
         ...getCustomMedicines().map(m => ({ name: m })),
-        ...allComboNames.map(c => ({ name: c, content: dbComboMap.get(c) || '' })),
+        ...allComboNames.map(c => ({ 
+          name: c, 
+          content: dbComboMap.get(c.toLowerCase()) || localStorageComboMap.get(c.toLowerCase()) || '' 
+        })),
         ...commonMedicines.slice(0, 5).map(m => ({ name: m }))
       ].slice(0, 10);
       setMedicineSuggestions(allMeds);
@@ -1317,7 +1372,7 @@ function DoctorPanelContent() {
     }
   };
 
-  const saveCombination = () => {
+  const saveCombination = async () => {
     if (editingCombinationIndex !== null) {
       setPrescriptions(prev => {
         const updated = [...prev];
@@ -1330,9 +1385,51 @@ function DoctorPanelContent() {
         };
         return updated;
       });
-      // Save combination name to memory for autocomplete
-      if (combinationName.trim()) {
-        saveCombinationName(combinationName);
+      
+      // Save combination to database for autocomplete with content
+      if (combinationName.trim() && combinationContent.trim()) {
+        try {
+          // Check if combination already exists in database
+          const existingCombo = dbCombinations.find(c => c.name.toLowerCase() === combinationName.toLowerCase());
+          
+          if (existingCombo) {
+            // Update existing combination
+            await fetch('/api/doctor-panel/combinations', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                id: (existingCombo as { id?: string }).id || existingCombo.name,
+                name: combinationName,
+                content: combinationContent 
+              }),
+            });
+          } else {
+            // Create new combination in database
+            await fetch('/api/doctor-panel/combinations', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                name: combinationName,
+                content: combinationContent,
+              }),
+            });
+          }
+          
+          // Refresh dbCombinations state
+          const response = await fetch('/api/doctor-panel/combinations');
+          const data = await response.json();
+          if (Array.isArray(data)) {
+            setDbCombinations(data.map((c: { name: string; content: string }) => ({ name: c.name, content: c.content })));
+          }
+        } catch (error) {
+          console.error('Failed to save combination to database:', error);
+        }
+        
+        // Also save to localStorage as backup with content
+        saveCombinationName(combinationName, combinationContent);
+      } else if (combinationName.trim()) {
+        // Save name only if no content
+        saveCombinationName(combinationName, '');
       }
     }
     setEditingCombinationIndex(null);
@@ -2506,11 +2603,22 @@ Dr. Homeopathic Clinic`);
                                         setMedicineSuggestions(suggestions);
                                       } else {
                                         // Show all medicines when field is empty (including database combinations with content)
-                                        const dbComboMap = new Map(dbCombinations.map(c => [c.name, c.content]));
-                                        const allComboNames = [...new Set([...dbComboMap.keys(), ...getCombinationNames()])];
+                                        const localStorageCombos = getCombinationsWithContent();
+                                        const dbComboMap = new Map(dbCombinations.map(c => [c.name.toLowerCase(), c.content]));
+                                        const localStorageComboMap = new Map(localStorageCombos.map(c => [c.name.toLowerCase(), c.content]));
+                                        
+                                        // Merge all combination names (database takes priority for content)
+                                        const allComboNames = [...new Set([
+                                          ...dbCombinations.map(c => c.name),
+                                          ...localStorageCombos.map(c => c.name)
+                                        ])]; 
+                                        
                                         const allMeds: {name: string; content?: string}[] = [
                                           ...getCustomMedicines().map(m => ({ name: m })),
-                                          ...allComboNames.map(c => ({ name: c, content: dbComboMap.get(c) || '' })),
+                                          ...allComboNames.map(c => ({ 
+                                            name: c, 
+                                            content: dbComboMap.get(c.toLowerCase()) || localStorageComboMap.get(c.toLowerCase()) || '' 
+                                          })),
                                           ...commonMedicines.slice(0, 5).map(m => ({ name: m }))
                                         ].slice(0, 10);
                                         setMedicineSuggestions(allMeds);
