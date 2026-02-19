@@ -9,6 +9,30 @@ import { pharmacyQueueDb, doctorPrescriptionDb, doctorVisitDb } from '@/lib/db/d
 import { patientDb, appointmentDb, billingQueueDb } from '@/lib/db/database';
 import type { PharmacyQueueItem, DoctorPrescription, DoctorVisit } from '@/lib/db/schema';
 
+// Helper to format date for display
+function formatDate(date: Date): string {
+  return date.toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric'
+  });
+}
+
+// Helper to get today's date string (YYYY-MM-DD)
+function getTodayString(): string {
+  const today = new Date();
+  return today.toISOString().split('T')[0];
+}
+
+// Helper to check if a date is today
+function isToday(date: Date | string): boolean {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const compareDate = new Date(date);
+  compareDate.setHours(0, 0, 0, 0);
+  return today.getTime() === compareDate.getTime();
+}
+
 // Types
 interface PatientInfo {
   id: string;
@@ -43,6 +67,7 @@ export default function PharmacyPage() {
   const [notification, setNotification] = useState<string | null>(null);
   const [lastUpdateTime, setLastUpdateTime] = useState<number>(0);
   const [activeTab, setActiveTab] = useState<TabType>('active');
+  const [selectedDate, setSelectedDate] = useState<string>(getTodayString()); // Default to today
   const previousPrescriptionIds = useRef<Map<string, string>>(new Map());
   
   // Load queue data
@@ -52,11 +77,18 @@ export default function PharmacyPage() {
     // Get all items from pharmacy queue
     const allItems = pharmacyQueueDb.getAll() as PharmacyQueueItem[];
     
+    // Filter by selected date
+    const filteredByDate = allItems.filter((item) => {
+      const itemDate = new Date(item.createdAt);
+      const filterDate = new Date(selectedDate);
+      return itemDate.toISOString().split('T')[0] === filterDate.toISOString().split('T')[0];
+    });
+    
     // Separate active and prepared items
-    const activeItems = allItems.filter(
+    const activeItems = filteredByDate.filter(
       (item) => item.status === 'pending' || item.status === 'preparing'
     );
-    const preparedItemsList = allItems.filter(
+    const preparedItemsList = filteredByDate.filter(
       (item) => item.status === 'prepared'
     );
     
@@ -120,7 +152,7 @@ export default function PharmacyPage() {
     setQueueItems(enrichedActiveItems);
     setPreparedItems(enrichedPreparedItems);
     setIsLoading(false);
-  }, [lastUpdateTime]);
+  }, [lastUpdateTime, selectedDate]);
 
   // Initial load and polling
   useEffect(() => {
@@ -362,7 +394,33 @@ export default function PharmacyPage() {
                 Manage prescriptions sent from doctor panel
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-4">
+              {/* Date Picker */}
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-gray-600">Date:</label>
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => {
+                    setSelectedDate(e.target.value);
+                    setSelectedItem(null);
+                  }}
+                  className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {selectedDate !== getTodayString() && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      setSelectedDate(getTodayString());
+                      setSelectedItem(null);
+                    }}
+                    className="text-xs"
+                  >
+                    Today
+                  </Button>
+                )}
+              </div>
               <div className="flex items-center gap-1 text-sm text-gray-500">
                 <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
                 Auto-refresh: 5s
@@ -372,6 +430,18 @@ export default function PharmacyPage() {
         </div>
 
         <div className="p-6">
+          {/* Date indicator for non-today dates */}
+          {selectedDate !== getTodayString() && (
+            <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2 flex items-center gap-2">
+              <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <span className="text-sm text-blue-800">
+                Viewing pharmacy queue for <strong>{formatDate(new Date(selectedDate))}</strong>
+              </span>
+            </div>
+          )}
+          
           {/* Stats */}
           <div className="grid grid-cols-4 gap-4 mb-6">
             <Card className="p-4">
