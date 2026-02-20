@@ -1565,9 +1565,10 @@ function DoctorPanelContent() {
     const appointments = appointmentDb.getByPatient(patient.id) as Appointment[];
     const todayAppointment = appointments.find((apt: Appointment) => {
       const aptDate = new Date(apt.appointmentDate);
-      return aptDate >= today && aptDate <= todayEnd && 
-             (apt.status === 'checked-in' || apt.status === 'in-progress');
+      return aptDate >= today && aptDate <= todayEnd;
     });
+    
+    console.log('[DoctorPanel] handleSaveFee - Found todayAppointment:', todayAppointment?.id, 'feeAmount:', todayAppointment?.feeAmount);
     
     // Update or create fee record
     let feeRecordId = currentAppointmentFee?.feeId;
@@ -1935,16 +1936,40 @@ function DoctorPanelContent() {
   const handleSendToBilling = () => {
     if (!savedVisitId || !patient) return;
     
-    // Get fee from current appointment fee (the actual fee selected during booking)
+    // Always read fresh fee from appointment database to avoid stale state issues
     let feeAmount = 300; // Default follow-up fee
     let feeType = 'Follow Up';
+    let paymentStatus = 'pending';
+    let appointmentIdToUse = currentAppointmentFee?.appointmentId;
     
-    // Use the current appointment fee if available
-    if (currentAppointmentFee && currentAppointmentFee.feeAmount > 0) {
-      feeAmount = currentAppointmentFee.feeAmount;
-      feeType = currentAppointmentFee.feeType || 'Follow Up';
+    // Find today's appointment to get the latest fee
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(today);
+    todayEnd.setHours(23, 59, 59, 999);
+    
+    const appointments = appointmentDb.getByPatient(patient.id) as Appointment[];
+    const todayAppointment = appointments.find((apt: Appointment) => {
+      const aptDate = new Date(apt.appointmentDate);
+      return aptDate >= today && aptDate <= todayEnd && 
+             (apt.status === 'checked-in' || apt.status === 'in-progress' || apt.status === 'scheduled');
+    });
+    
+    if (todayAppointment) {
+      appointmentIdToUse = todayAppointment.id;
+      const apt = todayAppointment as Appointment & { feeAmount?: number; feeType?: string; feeStatus?: string };
+      if (apt.feeAmount !== undefined && apt.feeAmount !== null) {
+        feeAmount = apt.feeAmount;
+      }
+      if (apt.feeType) {
+        feeType = apt.feeType;
+      }
+      if (apt.feeStatus) {
+        paymentStatus = apt.feeStatus;
+      }
+      console.log('[DoctorPanel] handleSendToBilling - Using fee from appointment:', feeAmount, feeType, paymentStatus);
     } else if (currentVisit && currentVisit.visitNumber === 1) {
-      // Fallback to visit type based fee only if no appointment fee
+      // Fallback to visit type based fee only if no appointment
       feeAmount = 500;
       feeType = 'New Patient';
     }
@@ -1953,18 +1978,18 @@ function DoctorPanelContent() {
     billingQueueDb.create({
       visitId: savedVisitId,
       patientId: patient.id,
-      appointmentId: currentAppointmentFee?.appointmentId,
+      appointmentId: appointmentIdToUse,
       prescriptionIds: [],
       status: 'pending',
       feeAmount,
       feeType,
       netAmount: feeAmount,
-      paymentStatus: 'pending'
+      paymentStatus
     });
     
     // Update appointment status to medicines-prepared (bypassing pharmacy)
-    if (currentAppointmentFee?.appointmentId) {
-      appointmentDb.update(currentAppointmentFee.appointmentId, { status: 'medicines-prepared' });
+    if (appointmentIdToUse) {
+      appointmentDb.update(appointmentIdToUse, { status: 'medicines-prepared' });
     }
     
     setPharmacySent(true);

@@ -184,15 +184,15 @@ export default function BillingPage() {
           }
         }
         
-        // Update if fee or status is different
-        if (correctFee !== item.feeAmount || correctPaymentStatus !== item.paymentStatus) {
+        // Update if fee, feeType, or status is different
+        if (correctFee !== item.feeAmount || correctFeeType !== item.feeType || correctPaymentStatus !== item.paymentStatus) {
           billingQueueDb.update(item.id, {
             feeAmount: correctFee,
             feeType: correctFeeType,
             paymentStatus: correctPaymentStatus,
             netAmount: correctFee - (item.discountAmount || 0)
           });
-          console.log('[Billing] Updated fee for existing item:', item.id, 'from', item.feeAmount, 'to', correctFee, 'status:', correctPaymentStatus);
+          console.log('[Billing] Updated fee for existing item:', item.id, 'from', item.feeAmount, item.feeType, 'to', correctFee, correctFeeType, 'status:', correctPaymentStatus);
         }
       }
     });
