@@ -96,6 +96,9 @@ class LocalDatabase {
     this.store.set('queue', []);
     this.store.set('pharmacy', []);
     this.store.set('staffActions', []);
+    this.store.set('slots', []);
+    this.store.set('queueConfigs', []);
+    this.store.set('queueItems', []);
 
     // Financial Domain
     this.store.set('fees', []);
@@ -642,33 +645,36 @@ export function seedInitialData(): void {
     db.create('fees', fee);
   });
 
-  // Seed default slots (Module 4)
-  const defaultSlots = [
-    {
-      name: 'Morning',
-      startTime: '11:00',
-      endTime: '13:30',
-      duration: 10,
-      maxTokens: 15,
-      tokenReset: true,
-      isActive: true,
-      displayOrder: 0,
-    },
-    {
-      name: 'Evening',
-      startTime: '18:00',
-      endTime: '20:30',
-      duration: 10,
-      maxTokens: 15,
-      tokenReset: true,
-      isActive: true,
-      displayOrder: 1,
-    },
-  ];
+  // Seed default slots (Module 4) - only if no slots exist
+  const existingSlots = db.getAll('slots');
+  if (existingSlots.length === 0) {
+    const defaultSlots = [
+      {
+        name: 'Morning',
+        startTime: '11:00',
+        endTime: '13:30',
+        duration: 10,
+        maxTokens: 15,
+        tokenReset: true,
+        isActive: true,
+        displayOrder: 0,
+      },
+      {
+        name: 'Evening',
+        startTime: '18:00',
+        endTime: '20:30',
+        duration: 10,
+        maxTokens: 15,
+        tokenReset: true,
+        isActive: true,
+        displayOrder: 1,
+      },
+    ];
 
-  defaultSlots.forEach((slot) => {
-    db.create('slots', slot);
-  });
+    defaultSlots.forEach((slot) => {
+      db.create('slots', slot);
+    });
+  }
 }
 
 // ============================================
@@ -1266,7 +1272,20 @@ export const slotDb = {
       return (slotA.displayOrder || 0) - (slotB.displayOrder || 0);
     });
   },
-  create: (slot: Parameters<typeof db.create>[1]) => db.create('slots', slot),
+  create: (slot: Parameters<typeof db.create>[1]) => {
+    // Check for duplicate slot name
+    const existingSlots = db.getAll('slots');
+    const slotData = slot as { name: string };
+    const duplicate = existingSlots.find((s: unknown) => {
+      const existing = s as { name: string };
+      return existing.name.toLowerCase() === slotData.name.toLowerCase();
+    });
+    if (duplicate) {
+      console.warn(`Slot with name "${slotData.name}" already exists`);
+      return duplicate;
+    }
+    return db.create('slots', slot);
+  },
   update: (id: string, updates: Parameters<typeof db.update>[2]) => db.update('slots', id, updates),
   delete: (id: string) => db.delete('slots', id),
   toggleActive: (id: string) => {

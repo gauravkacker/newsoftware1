@@ -18,10 +18,16 @@ export default function NewAppointmentPage() {
   const [feeTypes, setFeeTypes] = useState<FeeType[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
+  // Get current time in HH:MM format
+  const getCurrentTime = () => {
+    const now = new Date();
+    return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+  };
+
   const [formData, setFormData] = useState({
     date: new Date().toISOString().split("T")[0],
     slotId: "",
-    time: "09:00",
+    time: getCurrentTime(),
     duration: 10,
     type: "follow-up" as const,
     visitMode: "in-person" as const,
