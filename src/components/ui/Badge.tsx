@@ -6,7 +6,7 @@ import React from 'react';
 
 interface BadgeProps {
   children: React.ReactNode;
-  variant?: 'default' | 'success' | 'warning' | 'danger' | 'info' | 'outline' | 'destructive';
+  variant?: 'default' | 'success' | 'warning' | 'danger' | 'info' | 'outline' | 'destructive' | 'purple';
   size?: 'sm' | 'md';
   className?: string;
   style?: React.CSSProperties;
@@ -27,6 +27,7 @@ export function Badge({
     info: 'bg-blue-100 text-blue-700',
     outline: 'bg-transparent border border-gray-300 text-gray-700',
     destructive: 'bg-red-100 text-red-700',
+    purple: 'bg-purple-100 text-purple-700',
   };
 
   const sizeStyles = {

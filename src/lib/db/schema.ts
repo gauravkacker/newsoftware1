@@ -159,7 +159,7 @@ export interface BillingQueueItem {
   taxAmount?: number;
   netAmount: number;
   paymentMethod?: 'cash' | 'card' | 'upi' | 'cheque' | 'insurance' | 'exempt';
-  paymentStatus: 'pending' | 'paid' | 'partial' | 'refunded';
+  paymentStatus: 'pending' | 'paid' | 'partial' | 'refunded' | 'exempt';
   receiptNumber?: string;
   receiptGeneratedAt?: Date;
   notes?: string;
@@ -182,7 +182,7 @@ export interface BillingReceipt {
   taxAmount?: number;
   netAmount: number;
   paymentMethod: 'cash' | 'card' | 'upi' | 'cheque' | 'insurance' | 'exempt';
-  paymentStatus: 'paid' | 'pending' | 'partial' | 'refunded';
+  paymentStatus: 'paid' | 'pending' | 'partial' | 'refunded' | 'exempt';
   printedAt?: Date;
   whatsappSentAt?: Date;
   createdAt: Date;

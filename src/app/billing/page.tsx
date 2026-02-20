@@ -142,18 +142,20 @@ export default function BillingPage() {
       if (item.status === 'pending') {
         let correctFee = item.feeAmount;
         let correctFeeType = item.feeType;
+        let correctPaymentStatus = item.paymentStatus;
         let foundAppointment = false;
         
         // Try to get fee from appointmentId first
         if (item.appointmentId) {
           const appointment = appointmentDb.getById(item.appointmentId);
           if (appointment) {
-            const apt = appointment as { feeAmount?: number; feeType?: string };
+            const apt = appointment as { feeAmount?: number; feeType?: string; feeStatus?: string };
             if (apt.feeAmount !== undefined && apt.feeAmount !== null) {
               correctFee = apt.feeAmount;
               correctFeeType = apt.feeType || correctFeeType;
+              correctPaymentStatus = (apt.feeStatus as 'pending' | 'paid' | 'partial' | 'refunded') || correctPaymentStatus;
               foundAppointment = true;
-              console.log('[Billing] Found fee from appointmentId:', apt.feeAmount);
+              console.log('[Billing] Found fee from appointmentId:', apt.feeAmount, 'status:', apt.feeStatus);
             }
           }
         }
@@ -172,23 +174,25 @@ export default function BillingPage() {
           });
           
           if (todayAppointment) {
-            const apt = todayAppointment as { feeAmount?: number; feeType?: string };
+            const apt = todayAppointment as { feeAmount?: number; feeType?: string; feeStatus?: string };
             if (apt.feeAmount !== undefined && apt.feeAmount !== null) {
               correctFee = apt.feeAmount;
               correctFeeType = apt.feeType || correctFeeType;
-              console.log('[Billing] Found fee from today\'s appointment:', apt.feeAmount);
+              correctPaymentStatus = (apt.feeStatus as 'pending' | 'paid' | 'partial' | 'refunded') || correctPaymentStatus;
+              console.log('[Billing] Found fee from today\'s appointment:', apt.feeAmount, 'status:', apt.feeStatus);
             }
           }
         }
         
-        // Update if fee is different
-        if (correctFee !== item.feeAmount) {
+        // Update if fee or status is different
+        if (correctFee !== item.feeAmount || correctPaymentStatus !== item.paymentStatus) {
           billingQueueDb.update(item.id, {
             feeAmount: correctFee,
             feeType: correctFeeType,
+            paymentStatus: correctPaymentStatus,
             netAmount: correctFee - (item.discountAmount || 0)
           });
-          console.log('[Billing] Updated fee for existing item:', item.id, 'from', item.feeAmount, 'to', correctFee);
+          console.log('[Billing] Updated fee for existing item:', item.id, 'from', item.feeAmount, 'to', correctFee, 'status:', correctPaymentStatus);
         }
       }
     });
@@ -1102,9 +1106,17 @@ Get well soon.
                           </div>
                         </div>
                         
-                        <Badge variant={getStatusColor(item.status)}>
-                          {item.status}
-                        </Badge>
+                        <div className="flex flex-col gap-1">
+                          <Badge variant={getStatusColor(item.status)}>
+                            {item.status}
+                          </Badge>
+                          {item.paymentStatus === 'exempt' && (
+                            <Badge variant="purple">Exempt</Badge>
+                          )}
+                          {item.paymentStatus === 'partial' && (
+                            <Badge variant="warning">Partial</Badge>
+                          )}
+                        </div>
                       </div>
 
                       {/* Actions */}
