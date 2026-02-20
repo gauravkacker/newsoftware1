@@ -30,6 +30,11 @@ A complete Homeopathic Patient Management System built with Next.js 16, featurin
   - Integrated with doctor panel (bypass pharmacy → billing)
   - Added 'billed' status to appointments
   - Added 'outline' and 'success' button variants
+- [x] **Fixed: Appointment & Slot Issues** (February 2026)
+  - Appointment form now shows current time instead of hardcoded 9:00 AM
+  - Added duplicate slot name check in slotDb.create()
+  - Seed default slots only if no slots exist
+  - Added slots, queueConfigs, queueItems to initializeStores()
 
 ## Current Structure
 
