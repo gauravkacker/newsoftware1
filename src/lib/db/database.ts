@@ -107,6 +107,12 @@ class LocalDatabase {
 
     // Knowledge Domain
     this.store.set('materiaMedica', []);
+    this.store.set('materiaMedicaBooks', []);
+    this.store.set('materiaMedicaBookPages', []);
+    this.store.set('materiaMedicaSearchIndex', []);
+    this.store.set('materiaMedicaBookmarks', []);
+    this.store.set('materiaMedicaReadingHistory', []);
+    this.store.set('materiaMedicaAISearchCache', []);
     this.store.set('repertory', []);
     this.store.set('doctorNotes', []);
 
@@ -838,8 +844,8 @@ export const feeHistoryDb = {
   getLastByPatient: (patientId: string) => {
     const history = db.getAll('feeHistory');
     const patientHistory = history.filter((h: unknown) => {
-      const entry = h as { patientId: string };
-      return entry.patientId === patientId;
+      const entry = h as { patientId: string; amount: number };
+      return entry.patientId === patientId && entry.amount > 0;
     }) as Array<{ paidDate: Date; amount: number }>;
     
     if (patientHistory.length === 0) return null;
@@ -868,7 +874,169 @@ export const materiaMedicaDb = {
   getAll: () => db.getAll('materiaMedica'),
   getById: (id: string) => db.getById('materiaMedica', id),
   create: (item: Parameters<typeof db.create>[1]) => db.create('materiaMedica', item),
-  search: (query: string) => db.search('materiaMedica', query, ['name', 'symptoms', 'description']),
+  update: (id: string, updates: Record<string, unknown>) => db.update('materiaMedica', id, updates),
+  delete: (id: string) => db.delete('materiaMedica', id),
+};
+
+// ============================================
+// Materia Medica Library Operations
+// ============================================
+
+export const materiaMedicaBookDb = {
+  getAll: () => db.getAll('materiaMedicaBooks'),
+  getById: (id: string) => db.getById('materiaMedicaBooks', id),
+  getByCategory: (category: string) => {
+    const books = db.getAll('materiaMedicaBooks');
+    return books.filter((book: any) => book.category === category);
+  },
+  search: (query: string) => {
+    return db.search('materiaMedicaBooks', query, ['title', 'author', 'publisher']);
+  },
+  create: (book: Parameters<typeof db.create>[1]) => db.create('materiaMedicaBooks', book),
+  update: (id: string, updates: Record<string, unknown>) => db.update('materiaMedicaBooks', id, updates),
+  delete: (id: string) => db.delete('materiaMedicaBooks', id),
+  updateAccessTime: (id: string) => {
+    const book: any = db.getById('materiaMedicaBooks', id);
+    if (book) {
+      return db.update('materiaMedicaBooks', id, {
+        lastAccessedAt: new Date(),
+        accessCount: (book.accessCount || 0) + 1
+      });
+    }
+    return undefined;
+  }
+};
+
+export const materiaMedicaBookPageDb = {
+  getAll: () => db.getAll('materiaMedicaBookPages'),
+  getById: (id: string) => db.getById('materiaMedicaBookPages', id),
+  getByBook: (bookId: string) => {
+    const pages = db.getAll('materiaMedicaBookPages');
+    return pages.filter((page: any) => page.bookId === bookId);
+  },
+  getByBookAndPage: (bookId: string, pageNumber: number) => {
+    const pages = db.getAll('materiaMedicaBookPages');
+    return pages.find((page: any) => page.bookId === bookId && page.pageNumber === pageNumber);
+  },
+  create: (page: Parameters<typeof db.create>[1]) => db.create('materiaMedicaBookPages', page),
+  createBatch: (pages: any[]) => {
+    return pages.map(page => db.create('materiaMedicaBookPages', page));
+  },
+  delete: (id: string) => db.delete('materiaMedicaBookPages', id),
+  deleteByBook: (bookId: string) => {
+    const pages = db.getAll('materiaMedicaBookPages');
+    const bookPages = pages.filter((page: any) => page.bookId === bookId);
+    bookPages.forEach((page: any) => db.delete('materiaMedicaBookPages', page.id));
+    return bookPages.length;
+  }
+};
+
+export const materiaMedicaSearchIndexDb = {
+  getAll: () => db.getAll('materiaMedicaSearchIndex'),
+  getById: (id: string) => db.getById('materiaMedicaSearchIndex', id),
+  searchWord: (word: string, bookIds?: string[]) => {
+    const indices = db.getAll('materiaMedicaSearchIndex');
+    const normalizedWord = word.toLowerCase().trim();
+    return indices.filter((index: any) => {
+      const matchesWord = index.word === normalizedWord;
+      const matchesBook = !bookIds || bookIds.includes(index.bookId);
+      return matchesWord && matchesBook;
+    });
+  },
+  create: (index: Parameters<typeof db.create>[1]) => db.create('materiaMedicaSearchIndex', index),
+  createBatch: (indices: any[]) => {
+    return indices.map(index => db.create('materiaMedicaSearchIndex', index));
+  },
+  delete: (id: string) => db.delete('materiaMedicaSearchIndex', id),
+  deleteByBook: (bookId: string) => {
+    const indices = db.getAll('materiaMedicaSearchIndex');
+    const bookIndices = indices.filter((index: any) => index.bookId === bookId);
+    bookIndices.forEach((index: any) => db.delete('materiaMedicaSearchIndex', index.id));
+    return bookIndices.length;
+  }
+};
+
+export const materiaMedicaBookmarkDb = {
+  getAll: () => db.getAll('materiaMedicaBookmarks'),
+  getById: (id: string) => db.getById('materiaMedicaBookmarks', id),
+  getByBook: (bookId: string, userId?: string) => {
+    const bookmarks = db.getAll('materiaMedicaBookmarks');
+    return bookmarks.filter((bookmark: any) => {
+      const matchesBook = bookmark.bookId === bookId;
+      const matchesUser = !userId || bookmark.userId === userId;
+      return matchesBook && matchesUser;
+    });
+  },
+  getByUser: (userId: string) => {
+    const bookmarks = db.getAll('materiaMedicaBookmarks');
+    return bookmarks.filter((bookmark: any) => bookmark.userId === userId);
+  },
+  create: (bookmark: Parameters<typeof db.create>[1]) => db.create('materiaMedicaBookmarks', bookmark),
+  update: (id: string, updates: Record<string, unknown>) => db.update('materiaMedicaBookmarks', id, updates),
+  delete: (id: string) => db.delete('materiaMedicaBookmarks', id)
+};
+
+export const materiaMedicaReadingHistoryDb = {
+  getAll: () => db.getAll('materiaMedicaReadingHistory'),
+  getById: (id: string) => db.getById('materiaMedicaReadingHistory', id),
+  getByBook: (bookId: string, userId: string) => {
+    const histories = db.getAll('materiaMedicaReadingHistory');
+    return histories.find((history: any) => 
+      history.bookId === bookId && history.userId === userId
+    );
+  },
+  getByUser: (userId: string) => {
+    const histories = db.getAll('materiaMedicaReadingHistory');
+    return histories.filter((history: any) => history.userId === userId);
+  },
+  create: (history: Parameters<typeof db.create>[1]) => db.create('materiaMedicaReadingHistory', history),
+  update: (id: string, updates: Record<string, unknown>) => db.update('materiaMedicaReadingHistory', id, updates),
+  updateOrCreate: (bookId: string, userId: string, updates: any) => {
+    const existing: any = materiaMedicaReadingHistoryDb.getByBook(bookId, userId);
+    if (existing) {
+      return db.update('materiaMedicaReadingHistory', existing.id, {
+        ...updates,
+        sessionCount: (existing.sessionCount || 0) + 1,
+        lastReadAt: new Date()
+      });
+    } else {
+      return db.create('materiaMedicaReadingHistory', {
+        bookId,
+        userId,
+        ...updates,
+        sessionCount: 1,
+        lastReadAt: new Date()
+      });
+    }
+  },
+  delete: (id: string) => db.delete('materiaMedicaReadingHistory', id)
+};
+
+export const materiaMedicaAISearchCacheDb = {
+  getAll: () => db.getAll('materiaMedicaAISearchCache'),
+  getById: (id: string) => db.getById('materiaMedicaAISearchCache', id),
+  getByQueryHash: (queryHash: string) => {
+    const caches = db.getAll('materiaMedicaAISearchCache');
+    const cache: any = caches.find((c: any) => c.queryHash === queryHash);
+    if (cache && new Date(cache.expiresAt) > new Date()) {
+      // Update hit count and last accessed
+      db.update('materiaMedicaAISearchCache', cache.id, {
+        hitCount: (cache.hitCount || 0) + 1,
+        lastAccessedAt: new Date()
+      });
+      return cache;
+    }
+    return undefined;
+  },
+  create: (cache: Parameters<typeof db.create>[1]) => db.create('materiaMedicaAISearchCache', cache),
+  delete: (id: string) => db.delete('materiaMedicaAISearchCache', id),
+  cleanExpired: () => {
+    const caches = db.getAll('materiaMedicaAISearchCache');
+    const now = new Date();
+    const expired = caches.filter((cache: any) => new Date(cache.expiresAt) <= now);
+    expired.forEach((cache: any) => db.delete('materiaMedicaAISearchCache', cache.id));
+    return expired.length;
+  }
 };
 
 export const feesDb = {
@@ -1598,6 +1766,13 @@ export const billingReceiptDb = {
       return receipt.receiptNumber === receiptNumber;
     });
   },
+  getByBillingQueueId: (billingQueueId: string) => {
+    const receipts = db.getAll('billingReceipts');
+    return receipts.find((r: unknown) => {
+      const receipt = r as { billingQueueId: string };
+      return receipt.billingQueueId === billingQueueId;
+    });
+  },
   create: (receipt: Parameters<typeof db.create>[1]) => db.create('billingReceipts', receipt),
   update: (id: string, updates: Parameters<typeof db.update>[2]) => db.update('billingReceipts', id, updates),
   markPrinted: (id: string) => db.update('billingReceipts', id, { printedAt: new Date() }),
@@ -1613,10 +1788,12 @@ export const medicineBillDb = {
   getById: (id: string) => db.getById('medicineBills', id),
   getByBillingQueueId: (billingQueueId: string) => {
     const bills = db.getAll('medicineBills');
-    return bills.find((b: unknown) => {
+    const filtered = bills.filter((b: unknown) => {
       const bill = b as { billingQueueId: string };
       return bill.billingQueueId === billingQueueId;
-    });
+    }) as Array<{ createdAt: Date }>;
+    if (filtered.length === 0) return undefined;
+    return filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
   },
   getByVisitId: (visitId: string) => {
     const bills = db.getAll('medicineBills');

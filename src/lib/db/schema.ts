@@ -30,7 +30,13 @@ export interface DoctorVisit {
   nextVisit?: Date;
   prognosis?: string;
   remarksToFrontdesk?: string;
+  bp?: string;
+  pulse?: string;
+  tempF?: string;
+  weightKg?: string;
   status: string;
+  isSelfRepeat?: boolean; // Flag for patient-initiated prescription repeats
+  selfRepeatDate?: Date; // Date when patient requested repeat
   createdAt: Date;
   updatedAt: Date;
 }
@@ -87,11 +93,15 @@ export interface PharmacyQueueItem {
   patientId: string;
   appointmentId?: string;
   prescriptionIds: string[];
+  preparedPrescriptionIds?: string[];
   priority: boolean;
+  courier?: boolean;
   status: string;
   stopReason?: string;
   preparedBy?: string;
+  preparedAt?: Date;
   deliveredAt?: Date;
+  source?: string; // 'self-repeat' for patient-initiated repeats
   createdAt: Date;
   updatedAt: Date;
 }
@@ -209,6 +219,9 @@ export interface MedicineBill {
   taxPercent: number;
   taxAmount: number;
   grandTotal: number;
+  amountPaid?: number;
+  pendingAmount?: number;
+  paymentStatus?: 'paid' | 'partial' | 'pending';
   notes?: string;
   status: 'draft' | 'saved' | 'paid';
   createdAt: Date;
@@ -222,6 +235,7 @@ export interface MedicineBillItem {
   potency?: string;
   quantityDisplay?: string; // Original quantity string like "2dr"
   quantity: number; // Number of bottles for billing
+  doseForm?: string; // Dose form like Pills, Drops, etc.
   dosePattern?: string;
   frequency?: string;
   duration?: string;
@@ -268,3 +282,107 @@ export type InsertMedicineBill = Omit<MedicineBill, 'id' | 'createdAt' | 'update
 export type SelectMedicineBill = MedicineBill;
 export type InsertMedicineAmountMemory = Omit<MedicineAmountMemory, 'id' | 'lastUsedAt'>;
 export type SelectMedicineAmountMemory = MedicineAmountMemory;
+
+// ============================================
+// Materia Medica Types
+// ============================================
+
+// Book type
+export interface MateriaMedicaBook {
+  id: string;
+  title: string;
+  author: string;
+  publisher?: string;
+  edition?: string;
+  year?: number;
+  language: string;
+  category: 'materia-medica' | 'repertory' | 'philosophy' | 'other';
+  tags: string[];
+  filePath: string; // Relative path: materia-medica/books/{bookId}.pdf
+  fileName: string;
+  fileSize: number; // In bytes
+  totalPages: number;
+  uploadedBy: string;
+  uploadedAt: Date;
+  lastAccessedAt?: Date;
+  accessCount: number;
+  processingStatus: 'pending' | 'processing' | 'completed' | 'failed';
+  processingError?: string;
+  indexStatus: 'pending' | 'indexing' | 'indexed' | 'failed';
+  indexError?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// Book Page type
+export interface MateriaMedicaBookPage {
+  id: string;
+  bookId: string;
+  pageNumber: number;
+  text: string; // Extracted text content
+  wordCount: number;
+  hasImages: boolean;
+  extractedAt: Date;
+}
+
+// Search Index type
+export interface MateriaMedicaSearchIndex {
+  id: string;
+  bookId: string;
+  pageNumber: number;
+  word: string; // Normalized lowercase word
+  positions: number[]; // Character positions in page text
+  frequency: number; // Occurrences on this page
+  createdAt: Date;
+}
+
+// Bookmark type
+export interface MateriaMedicaBookmark {
+  id: string;
+  bookId: string;
+  userId: string;
+  pageNumber: number;
+  note?: string;
+  color?: string; // Highlight color
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// Reading History type
+export interface MateriaMedicaReadingHistory {
+  id: string;
+  bookId: string;
+  userId: string;
+  lastPageRead: number;
+  totalTimeSpent: number; // In seconds
+  sessionCount: number;
+  lastReadAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// AI Search Cache type
+export interface MateriaMedicaAISearchCache {
+  id: string;
+  query: string; // Original query
+  queryHash: string; // Hash for quick lookup
+  results: string[]; // Cached result IDs (JSON stringified)
+  hitCount: number;
+  lastAccessedAt: Date;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+// Type exports for Materia Medica
+export type InsertMateriaMedicaBook = Omit<MateriaMedicaBook, 'id' | 'createdAt' | 'updatedAt'>;
+export type SelectMateriaMedicaBook = MateriaMedicaBook;
+export type InsertMateriaMedicaBookPage = Omit<MateriaMedicaBookPage, 'id' | 'extractedAt'>;
+export type SelectMateriaMedicaBookPage = MateriaMedicaBookPage;
+export type InsertMateriaMedicaSearchIndex = Omit<MateriaMedicaSearchIndex, 'id' | 'createdAt'>;
+export type SelectMateriaMedicaSearchIndex = MateriaMedicaSearchIndex;
+export type InsertMateriaMedicaBookmark = Omit<MateriaMedicaBookmark, 'id' | 'createdAt' | 'updatedAt'>;
+export type SelectMateriaMedicaBookmark = MateriaMedicaBookmark;
+export type InsertMateriaMedicaReadingHistory = Omit<MateriaMedicaReadingHistory, 'id' | 'createdAt' | 'updatedAt'>;
+export type SelectMateriaMedicaReadingHistory = MateriaMedicaReadingHistory;
+export type InsertMateriaMedicaAISearchCache = Omit<MateriaMedicaAISearchCache, 'id' | 'createdAt'>;
+export type SelectMateriaMedicaAISearchCache = MateriaMedicaAISearchCache;

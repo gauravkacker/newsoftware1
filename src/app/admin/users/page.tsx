@@ -1,281 +1,373 @@
-// ============================================
-// Module 2: User Management Page
-// Doctor can manage users and roles (Module 2.3, 2.8)
-// ============================================
+"use client";
 
-'use client';
+import { useState, useEffect } from "react";
+import { Sidebar } from "@/components/layout/Sidebar";
+import { Button } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
+import { Input } from "@/components/ui/Input";
+import { Badge } from "@/components/ui/Badge";
 
-import { useState } from 'react';
-import { useAuth } from '@/lib/auth/auth-context';
-import { userDb, roleDb, permissionDb } from '@/lib/db/database';
-import { Button } from '@/components/ui/Button';
-import { Input } from '@/components/ui/Input';
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card';
-import { Badge } from '@/components/ui/Badge';
-import type { User, Role, Permission } from '@/types';
-
-export default function UsersPage() {
-  const { user, hasPermission, isAuthenticated } = useAuth();
-  const [activeTab, setActiveTab] = useState<'users' | 'roles'>('users');
-  const [editingRole, setEditingRole] = useState<Role | null>(null);
-
-  // Check if user has permission to manage users
-  if (!isAuthenticated || !hasPermission('settings')) {
-    return (
-      <div className="p-6">
-        <Card>
-          <CardContent className="py-8 text-center">
-            <p className="text-gray-500">Access Denied</p>
-            <p className="text-sm text-gray-400">You don&apos;t have permission to manage users.</p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  const users = userDb.getAll() as User[];
-  const roles = roleDb.getAll() as Role[];
-  const permissions = permissionDb.getAll() as Permission[];
-
-  return (
-    <div className="p-6 space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold">User Management</h1>
-        <div className="space-x-2">
-          <Button
-            variant={activeTab === 'users' ? 'primary' : 'secondary'}
-            onClick={() => setActiveTab('users')}
-          >
-            Users
-          </Button>
-          <Button
-            variant={activeTab === 'roles' ? 'primary' : 'secondary'}
-            onClick={() => setActiveTab('roles')}
-          >
-            Roles & Permissions
-          </Button>
-        </div>
-      </div>
-
-      {activeTab === 'users' ? (
-        <UsersList users={users} roles={roles} />
-      ) : (
-        <RolesList 
-          roles={roles} 
-          permissions={permissions}
-          editingRole={editingRole}
-          setEditingRole={setEditingRole}
-        />
-      )}
-    </div>
-  );
+// Simple user type
+interface User {
+  id: string;
+  username: string;
+  password: string;
+  name: string;
+  role: 'admin' | 'doctor' | 'receptionist' | 'pharmacist';
+  permissions: string[];
+  isActive: boolean;
+  createdAt: Date;
+  lastLogin?: Date;
 }
 
-function UsersList({ users, roles }: { users: User[]; roles: Role[] }) {
-  const getRoleName = (roleId: string) => {
-    const role = roles.find((r) => r.id === roleId);
-    return role?.name || 'Unknown';
+// Module permissions
+const MODULES = [
+  { id: 'patients', name: 'Patients' },
+  { id: 'appointments', name: 'Appointments' },
+  { id: 'doctor-panel', name: 'Doctor Panel' },
+  { id: 'pharmacy', name: 'Pharmacy' },
+  { id: 'billing', name: 'Billing' },
+  { id: 'prescriptions', name: 'Prescriptions' },
+  { id: 'reports', name: 'Reports' },
+  { id: 'settings', name: 'Settings' },
+  { id: 'admin', name: 'Admin' },
+];
+
+// Role presets
+const ROLE_PRESETS = {
+  admin: ['patients', 'appointments', 'doctor-panel', 'pharmacy', 'billing', 'prescriptions', 'reports', 'settings', 'admin'],
+  doctor: ['patients', 'appointments', 'doctor-panel', 'pharmacy', 'prescriptions', 'reports'],
+  receptionist: ['patients', 'appointments', 'billing'],
+  pharmacist: ['pharmacy', 'prescriptions'],
+};
+
+// Simple localStorage-based user management
+const USERS_KEY = 'clinic_users';
+
+const getUsers = (): User[] => {
+  if (typeof window === 'undefined') return [];
+  const stored = localStorage.getItem(USERS_KEY);
+  if (!stored) {
+    // Create default admin user
+    const defaultAdmin: User = {
+      id: 'admin-1',
+      username: 'admin',
+      password: 'admin123',
+      name: 'Administrator',
+      role: 'admin',
+      permissions: ROLE_PRESETS.admin,
+      isActive: true,
+      createdAt: new Date(),
+    };
+    localStorage.setItem(USERS_KEY, JSON.stringify([defaultAdmin]));
+    return [defaultAdmin];
+  }
+  return JSON.parse(stored);
+};
+
+const saveUsers = (users: User[]) => {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(USERS_KEY, JSON.stringify(users));
+  }
+};
+
+// Password generator
+const generatePassword = (): string => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  let password = '';
+  for (let i = 0; i < 8; i++) {
+    password += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return password;
+};
+
+export default function UsersManagementPage() {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [users, setUsers] = useState<User[]>([]);
+  const [showForm, setShowForm] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [formData, setFormData] = useState({
+    username: '',
+    password: '',
+    name: '',
+    role: 'receptionist' as User['role'],
+    permissions: [] as string[],
+  });
+
+  useEffect(() => {
+    setUsers(getUsers());
+  }, []);
+
+  const handleCreate = () => {
+    setEditingUser(null);
+    setShowForm(true);
+    const generatedPassword = generatePassword();
+    setFormData({
+      username: '',
+      password: generatedPassword,
+      name: '',
+      role: 'receptionist',
+      permissions: ROLE_PRESETS.receptionist,
+    });
   };
 
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex justify-between items-center">
-          <span>System Users</span>
-          <Button size="sm">Add User</Button>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="text-left border-b">
-                <th className="pb-2">Name</th>
-                <th className="pb-2">Username</th>
-                <th className="pb-2">Role</th>
-                <th className="pb-2">Status</th>
-                <th className="pb-2">Last Login</th>
-                <th className="pb-2">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((user) => (
-                <tr key={user.id} className="border-b">
-                  <td className="py-3">{user.name}</td>
-                  <td className="py-3">{user.username}</td>
-                  <td className="py-3">
-                    <Badge variant="outline">{getRoleName(user.roleId)}</Badge>
-                  </td>
-                  <td className="py-3">
-                    <Badge variant={user.isActive ? 'success' : 'destructive'}>
-                      {user.isActive ? 'Active' : 'Inactive'}
-                    </Badge>
-                  </td>
-                  <td className="py-3 text-sm text-gray-500">
-                    {user.lastLogin 
-                      ? new Date(user.lastLogin).toLocaleDateString() 
-                      : 'Never'}
-                  </td>
-                  <td className="py-3">
-                    <div className="space-x-2">
-                      <Button size="sm" variant="secondary">Edit</Button>
-                      {!user.isDoctor && (
-                        <Button size="sm" variant="destructive">Deactivate</Button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function RolesList({ 
-  roles, 
-  permissions, 
-  editingRole, 
-  setEditingRole 
-}: { 
-  roles: Role[]; 
-  permissions: Permission[];
-  editingRole: Role | null;
-  setEditingRole: (role: Role | null) => void;
-}) {
-  const groupedPermissions = permissions.reduce((acc, perm) => {
-    if (!acc[perm.category]) {
-      acc[perm.category] = [];
-    }
-    acc[perm.category].push(perm);
-    return acc;
-  }, {} as Record<string, Permission[]>);
-
-  if (editingRole) {
-    return (
-      <RoleEditor
-        role={editingRole}
-        groupedPermissions={groupedPermissions}
-        onSave={() => setEditingRole(null)}
-        onCancel={() => setEditingRole(null)}
-      />
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      {roles.map((role) => (
-        <Card key={role.id}>
-          <CardHeader>
-            <CardTitle className="flex justify-between items-center">
-              <div>
-                <span>{role.name}</span>
-                {role.isSystem && (
-                  <Badge variant="outline" className="ml-2">System</Badge>
-                )}
-              </div>
-              <div className="space-x-2">
-                <Button 
-                  size="sm" 
-                  variant="secondary"
-                  onClick={() => setEditingRole(role)}
-                >
-                  Edit Permissions
-                </Button>
-                {!role.isSystem && (
-                  <Button size="sm" variant="destructive">Delete</Button>
-                )}
-              </div>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-gray-600 mb-4">{role.description}</p>
-            <div className="flex flex-wrap gap-2">
-              {Object.entries(role.permissions)
-                .filter(([, enabled]) => enabled)
-                .map(([key]) => {
-                  const perm = permissions.find((p) => p.key === key);
-                  return perm ? (
-                    <Badge key={key} variant="success">{perm.name}</Badge>
-                  ) : null;
-                })}
-            </div>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
-}
-
-function RoleEditor({
-  role,
-  groupedPermissions,
-  onSave,
-  onCancel,
-}: {
-  role: Role;
-  groupedPermissions: Record<string, Permission[]>;
-  onSave: () => void;
-  onCancel: () => void;
-}) {
-  const [permissions, setPermissions] = useState(role.permissions);
-  const { logActivity } = useAuth();
-
-  const togglePermission = (key: string) => {
-    setPermissions((prev) => ({
-      ...prev,
-      [key]: !prev[key],
-    }));
+  const handleEdit = (user: User) => {
+    setEditingUser(user);
+    setShowForm(true);
+    setFormData({
+      username: user.username,
+      password: user.password,
+      name: user.name,
+      role: user.role,
+      permissions: user.permissions,
+    });
   };
 
   const handleSave = () => {
-    // In a real app, this would update the database
-    roleDb.update(role.id, { permissions });
-    logActivity('edit_role_permissions', 'admin', { roleId: role.id, permissions });
-    onSave();
+    if (!formData.username.trim() || !formData.name.trim()) {
+      alert('Please fill in all required fields');
+      return;
+    }
+
+    const updatedUsers = [...users];
+    
+    if (editingUser) {
+      const index = updatedUsers.findIndex(u => u.id === editingUser.id);
+      updatedUsers[index] = {
+        ...editingUser,
+        ...formData,
+      };
+    } else {
+      const newUser: User = {
+        id: `user-${Date.now()}`,
+        ...formData,
+        isActive: true,
+        createdAt: new Date(),
+      };
+      updatedUsers.push(newUser);
+    }
+
+    saveUsers(updatedUsers);
+    setUsers(updatedUsers);
+    setShowForm(false);
+    setEditingUser(null);
+  };
+
+  const handleDelete = (userId: string) => {
+    if (userId === 'admin-1') {
+      alert('Cannot delete the default admin user');
+      return;
+    }
+    
+    if (confirm('Are you sure you want to delete this user?')) {
+      const updatedUsers = users.filter(u => u.id !== userId);
+      saveUsers(updatedUsers);
+      setUsers(updatedUsers);
+    }
+  };
+
+  const handleToggleActive = (userId: string) => {
+    const updatedUsers = users.map(u => 
+      u.id === userId ? { ...u, isActive: !u.isActive } : u
+    );
+    saveUsers(updatedUsers);
+    setUsers(updatedUsers);
+  };
+
+  const handleRoleChange = (role: User['role']) => {
+    setFormData({
+      ...formData,
+      role,
+      permissions: ROLE_PRESETS[role],
+    });
+  };
+
+  const togglePermission = (moduleId: string) => {
+    const newPermissions = formData.permissions.includes(moduleId)
+      ? formData.permissions.filter(p => p !== moduleId)
+      : [...formData.permissions, moduleId];
+    setFormData({ ...formData, permissions: newPermissions });
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Edit Permissions: {role.name}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-6">
-          {Object.entries(groupedPermissions).map(([category, perms]) => (
-            <div key={category}>
-              <h3 className="text-sm font-semibold uppercase text-gray-500 mb-2">
-                {category}
-              </h3>
-              <div className="grid grid-cols-2 gap-2">
-                {perms.map((perm) => (
-                  <label
-                    key={perm.id}
-                    className="flex items-center space-x-2 p-2 rounded hover:bg-gray-50 cursor-pointer"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={permissions[perm.key] || false}
-                      onChange={() => togglePermission(perm.key)}
-                      className="rounded"
-                    />
-                    <div>
-                      <span className="text-sm">{perm.name}</span>
-                      <p className="text-xs text-gray-400">{perm.description}</p>
-                    </div>
-                  </label>
-                ))}
-              </div>
+    <div className="min-h-screen bg-gray-50">
+      <Sidebar />
+      
+      <div className={`transition-all duration-300 ${sidebarCollapsed ? "ml-16" : "ml-64"}`}>
+        {/* Header */}
+        <div className="bg-white border-b border-gray-200 px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
+              <p className="text-sm text-gray-500">Manage system users, roles, and permissions</p>
             </div>
-          ))}
+            {!showForm && (
+              <Button onClick={handleCreate}>
+                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Add User
+              </Button>
+            )}
+          </div>
         </div>
-        <div className="mt-6 flex justify-end space-x-2">
-          <Button variant="secondary" onClick={onCancel}>Cancel</Button>
-          <Button onClick={handleSave}>Save Changes</Button>
+
+        {/* Content */}
+        <div className="p-6">
+          {/* User Form */}
+          {showForm && (
+            <Card className="p-6 mb-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">
+                {editingUser ? 'Edit User' : 'Create New User'}
+              </h2>
+              
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Username *</label>
+                  <Input
+                    value={formData.username}
+                    onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                    placeholder="username"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
+                  <Input
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    placeholder="John Doe"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Password *</label>
+                  <div className="flex gap-2">
+                    <Input
+                      value={formData.password}
+                      onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                      placeholder="password"
+                    />
+                    <Button
+                      variant="secondary"
+                      onClick={() => setFormData({ ...formData, password: generatePassword() })}
+                    >
+                      Generate
+                    </Button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Role *</label>
+                  <select
+                    value={formData.role}
+                    onChange={(e) => handleRoleChange(e.target.value as User['role'])}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="admin">Admin</option>
+                    <option value="doctor">Doctor</option>
+                    <option value="receptionist">Receptionist</option>
+                    <option value="pharmacist">Pharmacist</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Permissions */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Module Permissions</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {MODULES.map((module) => (
+                    <label key={module.id} className="flex items-center gap-2 p-2 border border-gray-200 rounded hover:bg-gray-50">
+                      <input
+                        type="checkbox"
+                        checked={formData.permissions.includes(module.id)}
+                        onChange={() => togglePermission(module.id)}
+                        className="rounded border-gray-300"
+                      />
+                      <span className="text-sm">{module.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <Button onClick={handleSave}>
+                  {editingUser ? 'Update User' : 'Create User'}
+                </Button>
+                <Button variant="secondary" onClick={() => {
+                  setShowForm(false);
+                  setEditingUser(null);
+                }}>
+                  Cancel
+                </Button>
+              </div>
+            </Card>
+          )}
+
+          {/* Users List */}
+          <Card className="p-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">System Users</h2>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="text-left border-b">
+                    <th className="pb-3 text-sm font-medium text-gray-700">Name</th>
+                    <th className="pb-3 text-sm font-medium text-gray-700">Username</th>
+                    <th className="pb-3 text-sm font-medium text-gray-700">Password</th>
+                    <th className="pb-3 text-sm font-medium text-gray-700">Role</th>
+                    <th className="pb-3 text-sm font-medium text-gray-700">Permissions</th>
+                    <th className="pb-3 text-sm font-medium text-gray-700">Status</th>
+                    <th className="pb-3 text-sm font-medium text-gray-700">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((user) => (
+                    <tr key={user.id} className="border-b">
+                      <td className="py-3">{user.name}</td>
+                      <td className="py-3 font-mono text-sm">{user.username}</td>
+                      <td className="py-3 font-mono text-sm">{user.password}</td>
+                      <td className="py-3">
+                        <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
+                          {user.role}
+                        </Badge>
+                      </td>
+                      <td className="py-3">
+                        <span className="text-sm text-gray-600">{user.permissions.length} modules</span>
+                      </td>
+                      <td className="py-3">
+                        <Badge variant={user.isActive ? 'success' : 'default'}>
+                          {user.isActive ? 'Active' : 'Inactive'}
+                        </Badge>
+                      </td>
+                      <td className="py-3">
+                        <div className="flex gap-2">
+                          <Button size="sm" variant="secondary" onClick={() => handleEdit(user)}>
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => handleToggleActive(user.id)}
+                          >
+                            {user.isActive ? 'Deactivate' : 'Activate'}
+                          </Button>
+                          {user.id !== 'admin-1' && (
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => handleDelete(user.id)}
+                              className="text-red-600 hover:text-red-700"
+                            >
+                              Delete
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

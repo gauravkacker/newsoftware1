@@ -352,6 +352,7 @@ export interface Appointment {
   feeType?: string;
   feeAmount?: number;
   feeId?: string;
+  isFreeFollowUp?: boolean;
   advancePaid?: number;
   paymentMode?: string;
   feeExempt?: boolean;

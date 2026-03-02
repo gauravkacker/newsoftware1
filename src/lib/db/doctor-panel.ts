@@ -213,9 +213,17 @@ export const pharmacyQueueDb = {
   },
   
   markPrepared: (id: string, preparedBy: string) => {
+    const existing = db.getById<PharmacyQueueItem>('pharmacy', id);
+    let preparedIds: string[] = [];
+    if (existing) {
+      const rx = db.getAll<DoctorPrescription>('prescriptions').filter((p) => p.visitId === existing.visitId);
+      preparedIds = rx.map((p) => p.id);
+    }
     const result = db.update<PharmacyQueueItem>('pharmacy', id, {
       status: 'prepared',
       preparedBy,
+      preparedPrescriptionIds: preparedIds,
+      preparedAt: new Date(),
       updatedAt: new Date(),
     } as Record<string, unknown>);
     return result;

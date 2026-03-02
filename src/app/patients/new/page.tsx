@@ -91,6 +91,13 @@ export default function NewPatientPage() {
     feeExemptionReason: "",
     selectedTags: [] as string[],
   });
+  
+  const [mobileMatchingPatients, setMobileMatchingPatients] = useState<Array<{
+    id: string;
+    registrationNumber: string;
+    fullName: string;
+    age?: number;
+  }>>([]);
 
   useEffect(() => {
     loadTags();
@@ -140,6 +147,30 @@ export default function NewPatientPage() {
     if (name === "firstName" || name === "lastName" || name === "mobileNumber") {
       checkForDuplicates();
     }
+    
+    // Check for mobile number matches
+    if (name === "mobileNumber") {
+      checkMobileMatches(value);
+    }
+  };
+  
+  const checkMobileMatches = (mobile: string) => {
+    if (!mobile || mobile.length < 10) {
+      setMobileMatchingPatients([]);
+      return;
+    }
+    
+    const allPatients = patientDb.getAll() as Patient[];
+    const matches = allPatients
+      .filter(p => p.mobileNumber === mobile)
+      .map(p => ({
+        id: p.id,
+        registrationNumber: p.registrationNumber,
+        fullName: p.fullName,
+        age: p.age
+      }));
+    
+    setMobileMatchingPatients(matches);
   };
 
   const checkForDuplicates = () => {
@@ -491,16 +522,38 @@ export default function NewPatientPage() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Mobile Number <span className="text-red-500">*</span>
                   </label>
-                  <Input
-                    type="tel"
-                    name="mobileNumber"
-                    value={formData.mobileNumber}
-                    onChange={handleInputChange}
-                    placeholder="10-digit mobile number"
-                    maxLength={10}
-                    pattern="[0-9]{10}"
-                    required
-                  />
+                  <div className="relative">
+                    <Input
+                      type="tel"
+                      name="mobileNumber"
+                      value={formData.mobileNumber}
+                      onChange={handleInputChange}
+                      placeholder="10-digit mobile number"
+                      maxLength={10}
+                      pattern="[0-9]{10}"
+                      required
+                    />
+                    {mobileMatchingPatients.length > 0 && (
+                      <div className="absolute z-10 w-full mt-1 bg-white border border-amber-300 rounded-lg shadow-lg max-h-32 overflow-y-auto">
+                        <div className="px-2 py-1 bg-amber-50 border-b border-amber-200">
+                          <span className="text-xs font-medium text-amber-800">Existing patients with this number:</span>
+                        </div>
+                        {mobileMatchingPatients.map((patient) => (
+                          <div
+                            key={patient.id}
+                            className="px-2 py-1.5 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0"
+                            onClick={() => router.push(`/patients/${patient.id}`)}
+                          >
+                            <div className="text-xs font-medium text-gray-900">{patient.fullName}</div>
+                            <div className="text-xs text-gray-500">
+                              Reg: {patient.registrationNumber}
+                              {patient.age && ` • Age: ${patient.age} yrs`}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">

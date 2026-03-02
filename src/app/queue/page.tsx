@@ -39,7 +39,14 @@ export default function QueuePage() {
         setQueueConfig(config);
 
         const items = queueItemDb.getByQueueConfig(config.id) as QueueItem[];
-        setQueueItems(items);
+        
+        // Filter out items for deleted patients
+        const validItems = items.filter((item) => {
+          const patient = patientDb.getById(item.patientId);
+          return patient !== undefined && patient !== null;
+        });
+        
+        setQueueItems(validItems);
 
         // Get all appointments for today and this slot
         const allAppointments = appointmentDb.getAll() as Appointment[];
@@ -47,7 +54,9 @@ export default function QueuePage() {
         
         const todaySlotAppointments = allAppointments.filter((apt: Appointment) => {
           const aptDate = new Date(apt.appointmentDate).toISOString().split("T")[0];
-          return aptDate === todayDate && apt.slotId === selectedSlot;
+          // Filter out appointments for deleted patients
+          const patient = patientDb.getById(apt.patientId);
+          return aptDate === todayDate && apt.slotId === selectedSlot && patient !== undefined && patient !== null;
         });
 
         // Separate checked-in and scheduled

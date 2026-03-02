@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Sidebar } from "@/components/layout/Sidebar";
@@ -17,6 +17,9 @@ export default function NewAppointmentPage() {
   const [slots, setSlots] = useState<Slot[]>([]);
   const [feeTypes, setFeeTypes] = useState<FeeType[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState<number>(-1);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   // Get current time in HH:MM format
   const getCurrentTime = () => {
@@ -121,6 +124,20 @@ export default function NewAppointmentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     loadData();
   }, [loadData]);
+  
+  // Listen for fee types updates
+  useEffect(() => {
+    const handleFeeTypesUpdate = () => {
+      const activeFees = feeDb.getActive() as FeeType[];
+      setFeeTypes(activeFees);
+      console.log('[Appointments] Fee types refreshed:', activeFees.length);
+    };
+    
+    if (typeof window !== 'undefined') {
+      window.addEventListener('fee-types-updated', handleFeeTypesUpdate);
+      return () => window.removeEventListener('fee-types-updated', handleFeeTypesUpdate);
+    }
+  }, []);
 
   // Handle URL params for patient auto-selection (from "Register & Book Appointment")
   useEffect(() => {
@@ -256,16 +273,26 @@ export default function NewAppointmentPage() {
     const tokenNumber = (existingAppointments.length || 0) + 1;
 
     // Determine final fee status
-    let finalFeeStatus: 'pending' | 'paid' | 'exempt' = formData.feeStatus;
+    let finalFeeStatus: 'pending' | 'paid' | 'exempt' = 'pending'; // Default to pending
     let finalFeeAmount = formData.feeAmount;
     
+    // Exemption is explicit via feeExempt only (not for free follow-up)
     if (formData.feeExempt) {
       finalFeeStatus = 'exempt';
       finalFeeAmount = 0;
-    } else if (formData.advancePaid >= formData.feeAmount) {
+    } else if (formData.feeAmount === 0) {
+      // Free follow-up → keep status as pending (editable later)
+      finalFeeStatus = 'pending';
+      finalFeeAmount = 0;
+    } else if (formData.advancePaid >= formData.feeAmount && formData.feeAmount > 0) {
+      // Full payment made
       finalFeeStatus = 'paid';
-    } else if (formData.advancePaid > 0) {
-      finalFeeStatus = 'paid';
+    } else if (formData.advancePaid > 0 && formData.advancePaid < formData.feeAmount) {
+      // Partial payment made - still pending
+      finalFeeStatus = 'pending';
+    } else {
+      // No payment made - pending
+      finalFeeStatus = 'pending';
     }
 
     // Get selected fee type name
@@ -290,6 +317,7 @@ export default function NewAppointmentPage() {
       feeStatus: finalFeeStatus,
       feeAmount: finalFeeAmount,
       feeType: feeTypeName,
+      isFreeFollowUp: (feeTypeName === 'Free Follow Up') || (feeTypeName === 'Follow Up' && finalFeeAmount === 0),
       notes: formData.notes,
       isWalkIn: false,
       reminderSent: false,
@@ -299,18 +327,76 @@ export default function NewAppointmentPage() {
 
     const aptId = newAppointment.id;
 
-    // If advance payment made, record in fee history
+    // If advance payment made, record in fee history (check for duplicates first)
     if (formData.advancePaid > 0 && !formData.feeExempt) {
-      const appointmentType = formData.type as string;
-      feeHistoryDb.create({
-        patientId: selectedPatient.id,
-        appointmentId: aptId,
-        amount: formData.advancePaid,
-        feeType: appointmentType === 'new' ? 'first-visit' : 'follow-up' as const,
-        paymentMode: formData.paymentMode || 'cash',
-        paidDate: new Date(),
-        receiptId: `RCP-${Date.now()}`,
-      });
+      // Check if fee history already exists for this appointment
+      const allFeeHistory = feeHistoryDb.getAll() as FeeHistoryEntry[];
+      
+      console.log('[Appointments] Checking for existing fee history. appointmentId:', aptId);
+      
+      const existingFeeHistory = allFeeHistory.find((fh) => 
+        fh.appointmentId === aptId
+      );
+      
+      console.log('[Appointments] Found existing fee history?', !!existingFeeHistory, existingFeeHistory?.id);
+      
+      if (!existingFeeHistory) {
+        const newFeeHistoryId = `fh-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Use the actual fee type name from fee settings, not hardcoded normalization
+        // The fee type name is already stored in feeTypeName variable
+        let feeTypeForHistory: 'first-visit' | 'follow-up' | 'exempt' | 'consultation' | 'medicine' = 'follow-up';
+        
+        // Map common fee type names to standard format
+        const feeTypeNameLower = feeTypeName.toLowerCase();
+        if (feeTypeNameLower.includes('new') || feeTypeNameLower.includes('first')) {
+          feeTypeForHistory = 'first-visit';
+        } else if (feeTypeNameLower.includes('follow')) {
+          feeTypeForHistory = 'follow-up';
+        } else if (feeTypeNameLower.includes('exempt')) {
+          feeTypeForHistory = 'exempt';
+        } else if (feeTypeNameLower.includes('medicine')) {
+          feeTypeForHistory = 'medicine';
+        } else {
+          feeTypeForHistory = 'consultation';
+        }
+        
+        feeHistoryDb.create({
+          id: newFeeHistoryId,
+          patientId: selectedPatient.id,
+          appointmentId: aptId,
+          amount: formData.advancePaid,
+          feeType: feeTypeForHistory,
+          paymentMode: formData.paymentMode || 'cash',
+          paymentStatus: finalFeeStatus === 'paid' ? 'paid' : 'pending',
+          paidDate: new Date(),
+          receiptId: `RCP-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        });
+        console.log('[Appointments] ✅ CREATED NEW fee history entry:', newFeeHistoryId, 'appointmentId:', aptId, 'amount:', formData.advancePaid, 'feeTypeName:', feeTypeName, 'feeTypeForHistory:', feeTypeForHistory, 'paymentStatus:', finalFeeStatus === 'paid' ? 'paid' : 'pending');
+      } else {
+        // Update existing entry with advance payment
+        const feeTypeNameLower = feeTypeName.toLowerCase();
+        let feeTypeForHistory: 'first-visit' | 'follow-up' | 'exempt' | 'consultation' | 'medicine' = 'follow-up';
+        
+        if (feeTypeNameLower.includes('new') || feeTypeNameLower.includes('first')) {
+          feeTypeForHistory = 'first-visit';
+        } else if (feeTypeNameLower.includes('follow')) {
+          feeTypeForHistory = 'follow-up';
+        } else if (feeTypeNameLower.includes('exempt')) {
+          feeTypeForHistory = 'exempt';
+        } else if (feeTypeNameLower.includes('medicine')) {
+          feeTypeForHistory = 'medicine';
+        } else {
+          feeTypeForHistory = 'consultation';
+        }
+        
+        feeHistoryDb.update(existingFeeHistory.id, {
+          amount: formData.advancePaid,
+          feeType: feeTypeForHistory,
+          paymentStatus: finalFeeStatus === 'paid' ? 'paid' : 'pending',
+        });
+        console.log('[Appointments] ✏️ UPDATED existing fee history entry:', existingFeeHistory.id, 'New amount:', formData.advancePaid, 'feeTypeName:', feeTypeName, 'feeTypeForHistory:', feeTypeForHistory, 'paymentStatus:', finalFeeStatus === 'paid' ? 'paid' : 'pending');
+      }
     }
 
     // If fee exempt, record exemption
@@ -361,26 +447,60 @@ export default function NewAppointmentPage() {
                     placeholder="Search by name, registration number, or mobile..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (!searchQuery.trim()) return;
+                      const max = filteredPatients.length - 1;
+                      if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        const next = Math.min(activeIndex + 1, max);
+                        setActiveIndex(next);
+                        const el = itemRefs.current[next];
+                        if (el) {
+                          el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        }
+                      } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        const prev = Math.max(activeIndex - 1, 0);
+                        setActiveIndex(prev);
+                        const el = itemRefs.current[prev];
+                        if (el) {
+                          el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        }
+                      } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const indexToUse = activeIndex >= 0 ? activeIndex : 0;
+                        const chosen = filteredPatients[indexToUse];
+                        if (chosen) {
+                          setSelectedPatient(chosen);
+                          setSearchQuery("");
+                          setActiveIndex(-1);
+                        }
+                      }
+                    }}
                     className="mb-4"
                   />
                   {searchQuery.trim() && (
-                    <div className="max-h-60 overflow-y-auto space-y-2">
-                      {filteredPatients.map((patient) => {
+                    <div ref={listRef} className="max-h-60 overflow-y-auto space-y-1">
+                      {filteredPatients.map((patient, index) => {
                         const p = patient as { id: string; firstName: string; lastName: string; registrationNumber: string; mobileNumber: string };
                         return (
                           <button
                             key={p.id}
                             type="button"
+                            ref={(el) => { itemRefs.current[index] = el; }}
                             onClick={() => {
                               setSelectedPatient(patient);
                               setSearchQuery("");
+                              setActiveIndex(-1);
                             }}
-                            className="w-full text-left p-3 rounded-lg border border-gray-200 hover:border-blue-500 hover:bg-blue-50 transition-colors"
+                            className={`w-full text-left p-2 rounded-lg border transition-colors ${
+                              activeIndex === index ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-blue-500 hover:bg-blue-50'
+                            }`}
                           >
                             <div className="font-medium text-gray-900">
                               {p.firstName} {p.lastName}
                             </div>
-                            <div className="text-sm text-gray-500">
+                            <div className="text-xs text-gray-500">
                               {p.registrationNumber} • {p.mobileNumber}
                             </div>
                           </button>
@@ -670,7 +790,9 @@ export default function NewAppointmentPage() {
                         />
                         <p className="text-sm text-gray-500 mt-1">
                           Balance: ₹{(formData.feeAmount - formData.advancePaid).toFixed(0)} | 
-                          {formData.advancePaid >= formData.feeAmount ? (
+                          {(feeTypes.find(f => (f as FeeType).id === formData.feeTypeId)?.name === 'Free Follow Up' && formData.feeAmount === 0) ? (
+                            <span className="text-purple-600 font-medium">Free Follow Up</span>
+                          ) : formData.advancePaid >= formData.feeAmount ? (
                             <span className="text-green-600 font-medium">Fully Paid</span>
                           ) : formData.advancePaid > 0 ? (
                             <span className="text-yellow-600 font-medium">Partial Payment</span>

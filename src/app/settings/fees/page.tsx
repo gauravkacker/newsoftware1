@@ -14,6 +14,7 @@ export default function FeeSettingsPage() {
   const [fees, setFees] = useState<FeeType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [editingFee, setEditingFee] = useState<FeeType | null>(null);
+  const [showForm, setShowForm] = useState(false); // Control form visibility
   const [formData, setFormData] = useState({
     name: "",
     amount: 0,
@@ -36,6 +37,7 @@ export default function FeeSettingsPage() {
 
   const handleCreate = () => {
     setEditingFee(null);
+    setShowForm(true); // Show the form
     setFormData({
       name: "",
       amount: 0,
@@ -47,6 +49,7 @@ export default function FeeSettingsPage() {
 
   const handleEdit = (fee: FeeType) => {
     setEditingFee(fee);
+    setShowForm(true); // Show the form
     setFormData({
       name: fee.name,
       amount: fee.amount,
@@ -75,7 +78,13 @@ export default function FeeSettingsPage() {
     }
 
     setEditingFee(null);
+    setShowForm(false); // Hide the form
     loadFees();
+    
+    // Dispatch event to notify other modules to refresh fee types
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('fee-types-updated'));
+    }
   };
 
   const handleDelete = (feeId: string) => {
@@ -172,7 +181,7 @@ export default function FeeSettingsPage() {
             </div>
 
             {/* Add/Edit Form */}
-            {(editingFee || fees.length === 0) && !isLoading && (
+            {showForm && !isLoading && (
               <Card className="p-6">
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">
                   {editingFee ? "Edit Fee Type" : "Create New Fee Type"}
@@ -225,16 +234,21 @@ export default function FeeSettingsPage() {
                 </div>
                 <div className="flex gap-2">
                   <Button onClick={handleSave}>{editingFee ? "Update" : "Create"} Fee Type</Button>
-                  <Button variant="secondary" onClick={() => setEditingFee(null)}>
+                  <Button variant="secondary" onClick={() => {
+                    setShowForm(false);
+                    setEditingFee(null);
+                  }}>
                     Cancel
                   </Button>
                 </div>
               </Card>
             )}
 
-            {/* Add Fee Button */}
-            {!editingFee && fees.length > 0 && (
-              <Button onClick={handleCreate}>Add Another Fee Type</Button>
+            {/* Add Fee Button - Show when form is not visible */}
+            {!showForm && (
+              <Button onClick={handleCreate}>
+                {fees.length === 0 ? "Create First Fee Type" : "Add Another Fee Type"}
+              </Button>
             )}
           </div>
         </div>

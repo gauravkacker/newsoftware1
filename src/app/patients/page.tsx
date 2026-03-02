@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Badge } from "@/components/ui/Badge";
-import { patientDb, patientTagDb, visitDb, feeHistoryDb } from "@/lib/db/database";
+import { patientDb, patientTagDb, visitDb, feeHistoryDb, appointmentDb, billingQueueDb, db } from "@/lib/db/database";
+import { pharmacyQueueDb, doctorVisitDb, doctorPrescriptionDb } from "@/lib/db/doctor-panel";
 import type { Patient, PatientTag } from "@/types";
 
 // Format date helper
@@ -138,6 +139,64 @@ export default function PatientsPage() {
     }
   };
 
+  // Comprehensive patient deletion - removes all patient data from entire system
+  const deletePatientCompletely = (patientId: string) => {
+    console.log('[Patients] Deleting patient completely:', patientId);
+    
+    // 1. Delete from patient database
+    patientDb.delete(patientId);
+    
+    // 2. Delete all appointments
+    const appointments = appointmentDb.getByPatient(patientId);
+    appointments.forEach((apt: any) => {
+      appointmentDb.delete(apt.id);
+    });
+    
+    // 3. Delete all visits
+    const visits = visitDb.getByPatient(patientId);
+    visits.forEach((visit: any) => {
+      visitDb.delete(visit.id);
+    });
+    
+    // 4. Delete all fee history
+    const allFeeHistory = feeHistoryDb.getAll() as any[];
+    allFeeHistory.filter((fh: any) => fh.patientId === patientId).forEach((fh: any) => {
+      db.delete('feeHistory', fh.id);
+    });
+    
+    // 5. Delete all fees
+    const allFees = db.getAll('fees') as any[];
+    allFees.filter((f: any) => f.patientId === patientId).forEach((f: any) => {
+      db.delete('fees', f.id);
+    });
+    
+    // 6. Delete from billing queue
+    const allBilling = billingQueueDb.getAll() as any[];
+    allBilling.filter((b: any) => b.patientId === patientId).forEach((b: any) => {
+      billingQueueDb.delete(b.id);
+    });
+    
+    // 7. Delete from pharmacy queue
+    const allPharmacy = pharmacyQueueDb.getAll() as any[];
+    allPharmacy.filter((p: any) => p.patientId === patientId).forEach((p: any) => {
+      pharmacyQueueDb.delete(p.id);
+    });
+    
+    // 8. Delete all doctor visits
+    const allDoctorVisits = doctorVisitDb.getAll() as any[];
+    allDoctorVisits.filter((v: any) => v.patientId === patientId).forEach((v: any) => {
+      doctorVisitDb.delete(v.id);
+    });
+    
+    // 9. Delete all doctor prescriptions
+    const allPrescriptions = doctorPrescriptionDb.getAll() as any[];
+    allPrescriptions.filter((rx: any) => rx.patientId === patientId).forEach((rx: any) => {
+      doctorPrescriptionDb.delete(rx.id);
+    });
+    
+    console.log('[Patients] Patient deleted completely from all modules');
+  };
+
   // Delete selected patients
   const handleDeleteSelected = () => {
     setDeleteType('selected');
@@ -153,21 +212,22 @@ export default function PatientsPage() {
   // Confirm deletion
   const confirmDelete = () => {
     if (deleteType === 'all') {
-      // Delete all patients and their visits
+      // Delete all patients and their complete data
       const allPatients = patientDb.getAll() as Patient[];
       allPatients.forEach((patient) => {
-        patientDb.delete(patient.id);
+        deletePatientCompletely(patient.id);
       });
       setPatients([]);
     } else {
-      // Delete selected patients
+      // Delete selected patients completely
       selectedIds.forEach((id) => {
-        patientDb.delete(id);
+        deletePatientCompletely(id);
       });
       setPatients((prev) => prev.filter((p) => !selectedIds.has(p.id)));
       setSelectedIds(new Set());
     }
     setShowDeleteConfirm(false);
+    loadData(); // Reload to ensure UI is updated
   };
 
   return (
@@ -398,6 +458,24 @@ export default function PatientsPage() {
                           )}
                         </div>
                       )}
+                      
+                      {/* Edit Button */}
+                      <div className="flex-shrink-0">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/patients/${patient.id}/edit`);
+                          }}
+                          className="flex items-center gap-1"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                          Edit
+                        </Button>
+                      </div>
                     </div>
                   </Card>
                 );

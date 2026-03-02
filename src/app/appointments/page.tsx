@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
 import { appointmentDb, patientDb, slotDb } from "@/lib/db/database";
+import { doctorSettingsDb } from "@/lib/db/doctor-panel";
 import type { Appointment, Slot } from "@/types";
 
 export default function AppointmentsPage() {
@@ -29,13 +30,19 @@ export default function AppointmentsPage() {
     
     const allAppointments = appointmentDb.getAll() as Appointment[];
     
+    // Filter out appointments for deleted patients
+    const validAppointments = allAppointments.filter((apt) => {
+      const patient = patientDb.getById(apt.patientId);
+      return patient !== undefined && patient !== null;
+    });
+    
     // Filter by date if selected
     let filtered = dateFilter
-      ? allAppointments.filter((a: Appointment) => {
+      ? validAppointments.filter((a: Appointment) => {
           const aptDate = new Date(a.appointmentDate).toISOString().split("T")[0];
           return aptDate === dateFilter;
         })
-      : allAppointments;
+      : validAppointments;
     
     // Filter by slot if selected
     if (slotFilter !== "all") {
@@ -43,6 +50,9 @@ export default function AppointmentsPage() {
     }
     
     const sortedAppointments = filtered.sort((a, b) => {
+      // Sort by date first (newest first), then by time
+      const dateCompare = new Date(b.appointmentDate).getTime() - new Date(a.appointmentDate).getTime();
+      if (dateCompare !== 0) return dateCompare;
       return a.appointmentTime.localeCompare(b.appointmentTime);
     });
     
@@ -83,6 +93,8 @@ export default function AppointmentsPage() {
         return "warning";
       case "in-progress":
         return "warning";
+      case "sent-to-pharmacy":
+        return "info";
       case "medicines-prepared":
         return "success";
       case "billed":
@@ -98,6 +110,18 @@ export default function AppointmentsPage() {
     }
   };
 
+  const getStatusLabel = (status: string): string => {
+    switch (status) {
+      case "in-progress":
+        return "Case Taking";
+      case "sent-to-pharmacy":
+        return "Sent to Pharmacy";
+      case "medicines-prepared":
+        return "Medicines Prepared";
+      default:
+        return status.charAt(0).toUpperCase() + status.slice(1);
+    }
+  };
   const getTypeColor = (type: string): string => {
     switch (type) {
       case "new":
@@ -130,6 +154,9 @@ export default function AppointmentsPage() {
     if (statusFilter !== "all" && apt.status !== statusFilter) {
       return false;
     }
+    if (statusFilter === "all" && apt.status === "cancelled") {
+      return false;
+    }
     return true;
   });
 
@@ -142,6 +169,79 @@ export default function AppointmentsPage() {
     if (confirm("Cancel this appointment?")) {
       appointmentDb.cancel(appointmentId, "Cancelled by staff");
       loadAppointments();
+    }
+  };
+ 
+  const formatTime12h = (time: string): string => {
+    if (!time) return "";
+    const [h, m] = time.split(":").map((v) => parseInt(v, 10));
+    const hour = ((h % 12) || 12).toString().padStart(2, "0");
+    const ampm = h >= 12 ? "PM" : "AM";
+    return `${hour}:${`${m}`.padStart(2, "0")} ${ampm}`;
+  };
+  
+  const handlePrintToken = (appointment: Appointment) => {
+    const patient = patientDb.getById(appointment.patientId) as any;
+    
+    // Load print settings from the unified printSettings key
+    let tokenNote = "";
+    try {
+      const raw = doctorSettingsDb.get("printSettings");
+      if (raw) {
+        const parsed = JSON.parse(raw as string);
+        tokenNote = parsed.tokenNote || "";
+      }
+    } catch {}
+    
+    const token = (appointment.tokenNumber as any) || "-";
+    const name = patient ? `${patient.firstName} ${patient.lastName}` : "Unknown";
+    const reg = patient ? patient.registrationNumber : "";
+    const mobile = patient ? patient.mobileNumber : "";
+    const session = appointment.slotName || (appointment.slotId ? ((slotDb.getById(appointment.slotId) as any)?.name || "") : "");
+    const time = appointment.appointmentTime ? formatTime12h(appointment.appointmentTime) : "";
+    
+    const html = `
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Token</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
+            .ticket { width: 280px; padding: 12px; }
+            .header { text-align: center; margin-bottom: 8px; }
+            .row { display: flex; justify-content: space-between; align-items: flex-start; font-size: 12px; margin-bottom: 4px; }
+            .left { text-align: left; }
+            .right { text-align: right; }
+            .label { font-weight: 600; }
+            .patient { font-size: 12px; line-height: 1.4; margin-bottom: 8px; }
+            .token { text-align: center; font-size: 48px; font-weight: bold; margin: 8px 0; }
+            .time { text-align: center; font-size: 14px; margin-bottom: 8px; }
+            .footer { border-top: 1px dashed #999; padding-top: 6px; font-size: 11px; text-align: center; white-space: pre-wrap; }
+          </style>
+        </head>
+        <body onload="window.print(); setTimeout(() => window.close(), 300);">
+          <div class="ticket">
+            <div class="header"><strong>Appointment Token</strong></div>
+            <div class="row">
+              <div class="left"><span class="label">${name}</span></div>
+              ${reg ? `<div class="right">Reg: ${reg}</div>` : `<div></div>`}
+            </div>
+            <div class="row">
+              ${mobile ? `<div class="left">Mob: ${mobile}</div>` : `<div></div>`}
+              ${session ? `<div class="right">${session}</div>` : `<div></div>`}
+            </div>
+            <div class="token">${token}</div>
+            ${time ? `<div class="time">Appointment time - ${time}</div>` : ``}
+            ${tokenNote ? `<div class="footer">${tokenNote}</div>` : ``}
+          </div>
+        </body>
+      </html>
+    `;
+    const w = window.open("", "_blank", "width=320,height=480");
+    if (w) {
+      w.document.open();
+      w.document.write(html);
+      w.document.close();
     }
   };
 
@@ -284,86 +384,123 @@ export default function AppointmentsPage() {
               </Link>
             </Card>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-2">
               {filteredAppointments.map((appointment) => (
-                <Card key={appointment.id} className="p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className="text-center bg-blue-50 rounded-lg p-3 min-w-[80px] border-2 border-blue-200">
-                        <div className="text-xs text-blue-600 font-medium">Token</div>
-                        <div className="text-3xl font-bold text-blue-700">
-                          {appointment.tokenNumber || "-"}
-                        </div>
+                <Card key={appointment.id} className="p-2">
+                  <div className="flex items-center gap-3">
+                    {/* Token Number - Compact */}
+                    <div className="text-center bg-blue-50 rounded px-2 py-1 min-w-[50px] border border-blue-200">
+                      <div className="text-[10px] text-blue-600 font-medium leading-tight">Token</div>
+                      <div className="text-xl font-bold text-blue-700 leading-tight">{appointment.tokenNumber || "-"}</div>
+                    </div>
+                    
+                    {/* Date - Compact */}
+                    <div className="text-center bg-gray-100 rounded px-2 py-1 min-w-[60px]">
+                      <div className="text-[10px] text-gray-500 leading-tight">
+                        {formatDate(appointment.appointmentDate).split(",")[0]}
                       </div>
-                      <div className="text-center bg-gray-100 rounded-lg p-3 min-w-[80px]">
-                        <div className="text-sm text-gray-500">
-                          {formatDate(appointment.appointmentDate).split(",")[0]}
-                        </div>
-                        <div className="text-xl font-bold text-gray-900">
-                          {new Date(appointment.appointmentDate).getDate()}
-                        </div>
-                        <div className="text-sm text-gray-500">
-                          {formatDate(appointment.appointmentDate).split(",")[1]}
-                        </div>
+                      <div className="text-lg font-bold text-gray-900 leading-tight">
+                        {new Date(appointment.appointmentDate).getDate()}
                       </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-semibold text-gray-900">
+                    </div>
+                    
+                    {/* Patient Info - Using full width efficiently */}
+                    <div className="flex-1 grid grid-cols-12 gap-2 items-center">
+                      {/* Column 1: Patient Name & Priority (3 cols) */}
+                      <div className="col-span-3">
+                        <div className="flex items-center gap-1.5">
+                          <h3 className="font-semibold text-sm text-gray-900 truncate">
                             {getPatientName(appointment.patientId)}
                           </h3>
                           {appointment.priority !== "normal" && (
-                            <span className={`px-2 py-0.5 rounded-full text-xs border ${getPriorityColor(appointment.priority)}`}>
-                              {appointment.priority.replace("-", " ").toUpperCase()}
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-sm text-gray-500">
-                          {appointment.appointmentTime} • {appointment.duration} min
-                          {appointment.slotName && ` • ${appointment.slotName}`}
-                        </p>
-                        <div className="flex gap-2 mt-2">
-                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getTypeColor(appointment.type)}`}>
-                            {appointment.type.charAt(0).toUpperCase() + appointment.type.slice(1)}
-                          </span>
-                          <Badge variant={getStatusColor(appointment.status)}>
-                            {appointment.status.charAt(0).toUpperCase() + appointment.status.slice(1)}
-                          </Badge>
-                          {appointment.visitMode === "tele" && (
-                            <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                              Teleconsultation
-                            </span>
-                          )}
-                          {/* Fee Status Badge */}
-                          {appointment.feeStatus === "pending" && (
-                            <span className="px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                              Fee Pending
-                            </span>
-                          )}
-                          {appointment.feeStatus === "paid" && (
-                            <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                              Fee Paid
-                            </span>
-                          )}
-                          {appointment.feeStatus === "exempt" && (
-                            <span className="px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
-                              Fee Exempt
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] border whitespace-nowrap ${getPriorityColor(appointment.priority)}`}>
+                              {appointment.priority === "vip" ? "VIP" : appointment.priority === "emergency" ? "EMERGENCY" : "DR PRIORITY"}
                             </span>
                           )}
                         </div>
                       </div>
+                      
+                      {/* Column 2: Contact Info (3 cols) */}
+                      <div className="col-span-3 text-xs text-gray-600">
+                        {(() => {
+                          const patient = patientDb.getById(appointment.patientId) as any;
+                          return patient ? (
+                            <div className="space-y-0.5">
+                              <div>Regd No: {patient.registrationNumber}</div>
+                              <div>Mob No: {patient.mobileNumber}</div>
+                            </div>
+                          ) : null;
+                        })()}
+                      </div>
+                      
+                      {/* Column 3: Appointment Details (2 cols) */}
+                      <div className="col-span-2 text-xs text-gray-600">
+                        <div className="space-y-0.5">
+                          <div>{appointment.appointmentTime}</div>
+                          <div>{appointment.duration} min</div>
+                          {appointment.slotName && <div>{appointment.slotName}</div>}
+                        </div>
+                      </div>
+                      
+                      {/* Column 4: Badges (4 cols) */}
+                      <div className="col-span-4 flex flex-wrap gap-1">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium whitespace-nowrap ${getTypeColor(appointment.type)}`}>
+                          {appointment.type.charAt(0).toUpperCase() + appointment.type.slice(1)}
+                        </span>
+                        <Badge variant={getStatusColor(appointment.status)} size="sm" className="text-[10px] px-1.5 py-0.5 whitespace-nowrap">
+                          {getStatusLabel(appointment.status)}
+                        </Badge>
+                        {appointment.visitMode === "tele" && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-800 whitespace-nowrap">
+                            Teleconsultation
+                          </span>
+                        )}
+                        {/* Fee Status Badge */}
+                        {((appointment as any).isFreeFollowUp) ? (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-800 whitespace-nowrap">
+                            Free Follow Up
+                          </span>
+                        ) : (
+                          <>
+                            {appointment.feeStatus === "pending" && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-yellow-100 text-yellow-800 whitespace-nowrap">
+                                Fee Pending
+                              </span>
+                            )}
+                            {appointment.feeStatus === "paid" && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800 whitespace-nowrap">
+                                Fee Paid
+                              </span>
+                            )}
+                            {appointment.feeStatus === "exempt" && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-800 whitespace-nowrap">
+                                Fee Exempt
+                              </span>
+                            )}
+                          </>
+                        )}
+                        {appointment.notes && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-700 truncate max-w-[200px]" title={appointment.notes}>
+                            Note: {appointment.notes}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex gap-2">
+                    
+                    {/* Actions - Compact but visible */}
+                    <div className="flex gap-1.5 flex-shrink-0">
                       {["scheduled", "confirmed", "checked-in"].includes(appointment.status) && (
                         <>
                           <Button
                             variant="primary"
                             size="sm"
                             onClick={() => handleCheckIn(appointment.id)}
+                            className="text-xs px-2 py-1 whitespace-nowrap"
                           >
                             Check In
                           </Button>
                           <Link href={`/doctor-panel?patientId=${appointment.patientId}`}>
-                            <Button variant="primary" size="sm">
+                            <Button variant="primary" size="sm" className="text-xs px-2 py-1 whitespace-nowrap">
                               Case Taking
                             </Button>
                           </Link>
@@ -373,19 +510,27 @@ export default function AppointmentsPage() {
                         variant="danger"
                         size="sm"
                         onClick={() => handleCancel(appointment.id)}
+                        className="text-xs px-2 py-1 whitespace-nowrap"
                       >
                         Cancel
                       </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => handlePrintToken(appointment)}
+                        title="Print Token"
+                        className="px-2 py-1 text-xs whitespace-nowrap flex items-center gap-1"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                        </svg>
+                        Token
+                      </Button>
                       <Link href={`/appointments/${appointment.id}`}>
-                        <Button variant="secondary" size="sm">View</Button>
+                        <Button variant="secondary" size="sm" className="text-xs px-2 py-1 whitespace-nowrap">View</Button>
                       </Link>
                     </div>
                   </div>
-                  {appointment.notes && (
-                    <div className="mt-3 pt-3 border-t border-gray-100">
-                      <p className="text-sm text-gray-600">{appointment.notes}</p>
-                    </div>
-                  )}
                 </Card>
               ))}
             </div>

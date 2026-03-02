@@ -7,12 +7,12 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { patientDb, appointmentDb, billingQueueDb } from '@/lib/db/database';
+import { patientDb, appointmentDb, billingQueueDb, feeDb } from '@/lib/db/database';
 import { feeHistoryDb } from '@/lib/db/database';
-import { doctorVisitDb, doctorPrescriptionDb, pharmacyQueueDb } from '@/lib/db/doctor-panel';
+import { doctorVisitDb, doctorPrescriptionDb, pharmacyQueueDb, doctorSettingsDb } from '@/lib/db/doctor-panel';
 import { db } from '@/lib/db/database';
 import type { Patient, Appointment, FeeHistoryEntry } from '@/types';
-import type { DoctorVisit } from '@/lib/db/schema';
+import type { DoctorVisit, PharmacyQueueItem } from '@/lib/db/schema';
 
 // Local types for Doctor Panel (simpler for UI state)
 interface PatientRecord {
@@ -348,6 +348,10 @@ function DoctorPanelContent() {
   const [pastVisits, setPastVisits] = useState<Visit[]>([]);
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
   const [caseText, setCaseText] = useState('');
+  const [symptoms, setSymptoms] = useState<string[]>([]);
+  const [symptomInput, setSymptomInput] = useState('');
+  const [editingSymptomIndex, setEditingSymptomIndex] = useState<number | null>(null);
+  const [showSaveNotice, setShowSaveNotice] = useState(false);
   const [isSystemAssist, setIsSystemAssist] = useState(false);
   const [showHistory, setShowHistory] = useState(true);
   const [showMateriaMedica, setShowMateriaMedica] = useState(false);
@@ -362,27 +366,42 @@ function DoctorPanelContent() {
   const [nextVisitDays, setNextVisitDays] = useState('');
   const [prognosis, setPrognosis] = useState('');
   const [remarksToFrontdesk, setRemarksToFrontdesk] = useState('');
+  const [bp, setBp] = useState('');
+  const [pulse, setPulse] = useState('');
+  const [tempF, setTempF] = useState('');
+  const [weightKg, setWeightKg] = useState('');
   
   // Additional notes form state
   const [showAdditionalNotes, setShowAdditionalNotes] = useState(false);
   
   // Field order for additional notes (persisted to localStorage)
   const [additionalNotesFieldOrder, setAdditionalNotesFieldOrder] = useState<string[]>(() => {
+    const baseFields = ['diagnosis', 'testsRequired', 'advice', 'prognosis', 'remarksToFrontdesk', 'bp', 'pulse', 'tempF', 'weightKg'];
     if (typeof window !== 'undefined') {
       try {
         const saved = localStorage.getItem('doctor_panel_field_order');
-        return saved ? JSON.parse(saved) : ['diagnosis', 'testsRequired', 'advice', 'prognosis', 'remarksToFrontdesk'];
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          const merged = Array.isArray(parsed) ? [...parsed, ...baseFields.filter((f) => !parsed.includes(f))] : baseFields;
+          localStorage.setItem('doctor_panel_field_order', JSON.stringify(merged));
+          return merged;
+        }
+        return baseFields;
       } catch {
-        return ['diagnosis', 'testsRequired', 'advice', 'prognosis', 'remarksToFrontdesk'];
+        return baseFields;
       }
     }
-    return ['diagnosis', 'testsRequired', 'advice', 'prognosis', 'remarksToFrontdesk'];
+    return baseFields;
   });
   
   // Fee editing
   const [feeAmount, setFeeAmount] = useState('');
   const [feeType, setFeeType] = useState('consultation');
+  const [feeTypeId, setFeeTypeId] = useState(''); // Store fee type ID
+  const [feeTypes, setFeeTypes] = useState<any[]>([]); // Load from fee settings
   const [paymentStatus, setPaymentStatus] = useState('pending');
+  const [showPatientMenu, setShowPatientMenu] = useState(false); // Patient dropdown menu
+  const [showEditPatientForm, setShowEditPatientForm] = useState(false); // Edit patient form
   const [discountPercent, setDiscountPercent] = useState('');
   const [discountReason, setDiscountReason] = useState('');
   const [showFeeForm, setShowFeeForm] = useState(false);
@@ -671,8 +690,105 @@ function DoctorPanelContent() {
   const [showSameDayReopenModal, setShowSameDayReopenModal] = useState(false);
   const [showPrescriptionPreview, setShowPrescriptionPreview] = useState(false);
   const [savedVisitId, setSavedVisitId] = useState<string | null>(null);
+  const [showRepeatVisitChoice, setShowRepeatVisitChoice] = useState(false);
+  const [repeatVisitId, setRepeatVisitId] = useState<string | null>(null);
   const [isConsultationEnded, setIsConsultationEnded] = useState(false);
   const [pharmacySent, setPharmacySent] = useState(false);
+  const [showPharmacyMini, setShowPharmacyMini] = useState(false);
+  const [showAppointmentsBoard, setShowAppointmentsBoard] = useState(false);
+  const [todayAppointments, setTodayAppointments] = useState<any[]>([]);
+  const [nextPatientId, setNextPatientId] = useState<string | null>(null);
+  const [pharmacyDockSide, setPharmacyDockSide] = useState<'right' | 'left'>('right');
+  const [pharmacyLiveItems, setPharmacyLiveItems] = useState<PharmacyQueueItem[]>([]);
+  
+  // Prescription preview/print settings
+  const [prescriptionSettingsView, setPrescriptionSettingsView] = useState<any | null>(null);
+  const [prescriptionSettingsPrint, setPrescriptionSettingsPrint] = useState<any | null>(null);
+  const [doctorSignatureUrl, setDoctorSignatureUrl] = useState<string | null>(null);
+  const [smartParseHistory, setSmartParseHistory] = useState<string[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem('smartParseHistory');
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  });
+  const [smartParseSuggestions, setSmartParseSuggestions] = useState<string[]>([]);
+  const [showSmartParseSuggestions, setShowSmartParseSuggestions] = useState(false);
+  const [smartParseSelectedIndex, setSmartParseSelectedIndex] = useState<number>(-1);
+  
+  useEffect(() => {
+    try {
+      const raw = doctorSettingsDb.get('prescriptionSettings');
+      if (raw) {
+        const parsed = JSON.parse(raw as string);
+        setPrescriptionSettingsView(parsed.view || null);
+        setPrescriptionSettingsPrint(parsed.print || null);
+        setDoctorSignatureUrl(parsed.signatureUrl || null);
+      } else {
+        setPrescriptionSettingsView({
+          patient: { name: true, age: true, sex: true, visitDate: true, regNo: true },
+          rxFields: { medicine: true, potency: true, quantity: true, doseForm: true, dosePattern: true, frequency: true, duration: true, instructions: true, showCombinationDetails: true },
+          additional: { caseText: true, advice: true, nextVisit: true }
+        });
+        setPrescriptionSettingsPrint({
+          patient: { name: true, age: true, sex: true, visitDate: true, regNo: true },
+          rxFields: { medicine: true, potency: true, quantity: true, doseForm: true, dosePattern: true, frequency: true, duration: true, instructions: true, showCombinationDetails: true },
+          additional: { caseText: true, advice: true, nextVisit: true }
+        });
+      }
+    } catch {
+      // Fallback defaults
+      setPrescriptionSettingsView({
+        patient: { name: true, age: true, sex: true, visitDate: true, regNo: true },
+        rxFields: { medicine: true, potency: true, quantity: true, doseForm: true, dosePattern: true, frequency: true, duration: true, instructions: true, showCombinationDetails: true },
+        additional: { caseText: true, advice: true, nextVisit: true }
+      });
+      setPrescriptionSettingsPrint({
+        patient: { name: true, age: true, sex: true, visitDate: true, regNo: true },
+        rxFields: { medicine: true, potency: true, quantity: true, doseForm: true, dosePattern: true, frequency: true, duration: true, instructions: true, showCombinationDetails: true },
+        additional: { caseText: true, advice: true, nextVisit: true }
+      });
+    }
+  }, []);
+  
+  useEffect(() => {
+    const refreshPharmacy = () => {
+      const all = (pharmacyQueueDb.getAll() || []) as PharmacyQueueItem[];
+      const todayISO = new Date().toISOString().split('T')[0];
+      const filtered = all.filter((q) => {
+        const createdISO = (q.createdAt instanceof Date ? q.createdAt : new Date(q.createdAt)).toISOString().split('T')[0];
+        const isToday = createdISO === todayISO;
+        return isToday;
+      }).sort((a, b) => {
+        // Priority first, then by creation time
+        if (a.priority && !b.priority) return -1;
+        if (!a.priority && b.priority) return 1;
+        const timeA = (a.createdAt instanceof Date ? a.createdAt : new Date(a.createdAt)).getTime();
+        const timeB = (b.createdAt instanceof Date ? b.createdAt : new Date(b.createdAt)).getTime();
+        return timeA - timeB;
+      });
+      setPharmacyLiveItems(filtered);
+    };
+    refreshPharmacy();
+    const interval = setInterval(refreshPharmacy, 3000);
+    const handler = () => refreshPharmacy();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pharmacy-queue-updated', handler as EventListener);
+      window.addEventListener('fees-updated', handler as EventListener);
+    }
+    return () => {
+      clearInterval(interval);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('pharmacy-queue-updated', handler as EventListener);
+        window.removeEventListener('fees-updated', handler as EventListener);
+      }
+    };
+  }, []);
   
   // Past visits popup state
   const [showPastVisitsPopup, setShowPastVisitsPopup] = useState(false);
@@ -682,6 +798,9 @@ function DoctorPanelContent() {
   const caseTextRef = useRef<HTMLTextAreaElement>(null);
   const medicineInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const [activeSearchIndex, setActiveSearchIndex] = useState<number>(-1);
+  const searchListRef = useRef<HTMLDivElement | null>(null);
+  const searchItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   // Search for patients
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -730,13 +849,21 @@ function DoctorPanelContent() {
     
     if (!patientData) return;
     
+    // Calculate age from dateOfBirth or use age field directly
+    let calculatedAge: number | undefined;
+    if (patientData.age) {
+      calculatedAge = patientData.age;
+    } else if (patientData.dateOfBirth) {
+      calculatedAge = new Date().getFullYear() - new Date(patientData.dateOfBirth).getFullYear();
+    }
+    
     const patientRecord: PatientRecord = {
       id: patientData.id,
       firstName: patientData.firstName,
       lastName: patientData.lastName,
       mobile: patientData.mobileNumber,
       registrationNumber: patientData.registrationNumber,
-      age: patientData.dateOfBirth ? new Date().getFullYear() - new Date(patientData.dateOfBirth).getFullYear() : undefined,
+      age: calculatedAge,
       gender: patientData.gender,
     };
     setPatient(patientRecord);
@@ -770,7 +897,20 @@ function DoctorPanelContent() {
       });
       setFeeAmount(String((todayAppointment.feeAmount as number) || ''));
       setFeeType((todayAppointment.feeType as string) || 'consultation');
+      setFeeTypeId(apt.feeTypeId || ''); // Set fee type ID from appointment
       setPaymentStatus((todayAppointment.feeStatus as string) || 'pending');
+      // Mark status as in-progress when entering case taking
+      if ((todayAppointment.status as string) !== 'in-progress') {
+        appointmentDb.update(todayAppointment.id, { status: 'in-progress' });
+      }
+      // Load any active visit and hydrate symptoms
+      const activeVisit = doctorVisitDb.getActiveByPatient(patientData.id);
+      if (activeVisit) {
+        const text = activeVisit.caseText || '';
+        setCaseText(text);
+        setSymptoms(text.split('\n').filter((s) => s.trim().length > 0));
+        setSavedVisitId(activeVisit.id);
+      }
     }
 
     // Get last fee paid info
@@ -792,14 +932,14 @@ function DoctorPanelContent() {
         feeType: lastFee.feeType,
         status: 'paid',
       });
-    } else if (todayAppointment) {
-      // If no paid fee history but current appointment exists, show the appointment fee as last fee info
+    } else if (todayAppointment && (todayAppointment.feeAmount as number) > 0) {
+      // If no paid fee history but current appointment exists with fee > 0, show the appointment fee as last fee info
       // This handles new patients and shows their fee regardless of status (pending, paid, exempt)
       const aptDate = new Date(todayAppointment.appointmentDate);
       const feeStatus = (todayAppointment.feeStatus as string) || 'pending';
       setLastFeeInfo({
         date: aptDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
-        amount: (todayAppointment.feeAmount as number) || 0,
+        amount: (todayAppointment.feeAmount as number),
         daysAgo: 0,
         feeType: (todayAppointment.feeType as string) || 'consultation',
         status: feeStatus as 'paid' | 'pending',
@@ -843,19 +983,117 @@ function DoctorPanelContent() {
     );
     setPastVisits(displayVisits);
     
-    // Calculate next visit number based on past visits count
     const nextVisitNumber = formattedVisits.length + 1;
-    
-    // Check for active visit
-    const mockActiveVisit: Visit = {
-      id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      patientId: id,
-      visitDate: new Date(),
-      visitNumber: nextVisitNumber,
-      status: 'active',
-    };
-    setCurrentVisit(mockActiveVisit);
+    const activeVisit = doctorVisitDb.getActiveByPatient(id) as DoctorVisit | undefined;
+    const todayISO = new Date().toISOString().split('T')[0];
+    const todaysLocked = (doctorVisitDb.getByPatient(id) as DoctorVisit[]).find((v) => {
+      const d = (v.visitDate instanceof Date ? v.visitDate : new Date(v.visitDate)).toISOString().split('T')[0];
+      return d === todayISO && (v.status === 'locked' || v.status === 'completed');
+    });
+    if (activeVisit && !todaysLocked) {
+      setCurrentVisit({
+        id: activeVisit.id,
+        patientId: activeVisit.patientId,
+        visitDate: activeVisit.visitDate,
+        visitNumber: nextVisitNumber,
+        chiefComplaint: activeVisit.chiefComplaint,
+        caseText: activeVisit.caseText,
+        diagnosis: activeVisit.diagnosis,
+        advice: activeVisit.advice,
+        testsRequired: activeVisit.testsRequired,
+        nextVisit: activeVisit.nextVisit,
+        prognosis: activeVisit.prognosis,
+        remarksToFrontdesk: activeVisit.remarksToFrontdesk,
+        status: 'active',
+      });
+      setSavedVisitId(activeVisit.id);
+      const rx = doctorPrescriptionDb.getByVisit(activeVisit.id);
+      // Replace prescriptions to avoid duplicates
+      setPrescriptions(rx.map((p) => ({
+        medicine: p.medicine,
+        potency: p.potency || '',
+        quantity: p.quantity,
+        doseForm: p.doseForm || '',
+        dosePattern: p.dosePattern || '',
+        frequency: p.frequency || '',
+        duration: p.duration || '',
+        durationDays: p.durationDays || 0,
+        bottles: p.bottles || 1,
+        instructions: p.instructions || '',
+        isCombination: p.isCombination || false,
+        combinationName: p.combinationName || '',
+        combinationContent: p.combinationContent || '',
+      })));
+      setCaseText(activeVisit.caseText || '');
+      setDiagnosis(activeVisit.diagnosis || '');
+      setAdvice(activeVisit.advice || '');
+      setTestsRequired(activeVisit.testsRequired || '');
+      setPrognosis(activeVisit.prognosis || '');
+      setRemarksToFrontdesk(activeVisit.remarksToFrontdesk || '');
+    } else {
+      // Show choice modal when there is a same-day completed/locked visit or no active visit
+      if (activeVisit || todaysLocked) {
+        setShowRepeatVisitChoice(true);
+        setRepeatVisitId((activeVisit?.id || todaysLocked?.id) || null);
+        // Ensure no leftover prescriptions causing duplicates
+        setSavedVisitId(null);
+        setPrescriptions([]);
+        setCaseText('');
+        setDiagnosis('');
+        setAdvice('');
+        setTestsRequired('');
+        setPrognosis('');
+        setRemarksToFrontdesk('');
+        setBp('');
+        setPulse('');
+        setTempF('');
+        setWeightKg('');
+      }
+      const mockActiveVisit: Visit = {
+        id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        patientId: id,
+        visitDate: new Date(),
+        visitNumber: nextVisitNumber,
+        status: 'active',
+      };
+      setCurrentVisit(mockActiveVisit);
+    }
   }, [setPatient, setCurrentVisit, setPastVisits, setFeeAmount, setFeeType, setPaymentStatus, setLastFeeInfo]);
+
+  // Load fee types from settings on mount
+  useEffect(() => {
+    const activeFees = feeDb.getActive() as any[];
+    setFeeTypes(activeFees);
+  }, []);
+  
+  // Listen for fee types updates
+  useEffect(() => {
+    const handleFeeTypesUpdate = () => {
+      const activeFees = feeDb.getActive() as any[];
+      setFeeTypes(activeFees);
+      console.log('[DoctorPanel] Fee types refreshed:', activeFees.length);
+    };
+    
+    if (typeof window !== 'undefined') {
+      window.addEventListener('fee-types-updated', handleFeeTypesUpdate);
+      return () => window.removeEventListener('fee-types-updated', handleFeeTypesUpdate);
+    }
+  }, []);
+  
+  // Close patient menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('.patient-menu-container')) {
+        setShowPatientMenu(false);
+      }
+    };
+    
+    if (showPatientMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showPatientMenu]);
 
   // Load patient from URL on mount
   useEffect(() => {
@@ -863,6 +1101,77 @@ function DoctorPanelContent() {
       loadPatientData(patientIdFromUrl);
     }
   }, [patientIdFromUrl, loadPatientData]);
+
+  // Load today's appointments
+  useEffect(() => {
+    const loadTodayAppointments = () => {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(today);
+      todayEnd.setHours(23, 59, 59, 999);
+      
+      const allAppointments = appointmentDb.getAll() as any[];
+      const todayApts = allAppointments
+        .filter((apt: any) => {
+          const aptDate = new Date(apt.appointmentDate);
+          return aptDate >= today && aptDate <= todayEnd && ['scheduled', 'confirmed', 'checked-in'].includes(apt.status);
+        })
+        .sort((a: any, b: any) => {
+          const timeA = a.appointmentTime || '00:00';
+          const timeB = b.appointmentTime || '00:00';
+          return timeA.localeCompare(timeB);
+        })
+        .map((apt: any) => {
+          const patient = patientDb.getById(apt.patientId) as any;
+          return {
+            ...apt,
+            patientName: patient ? `${patient.firstName} ${patient.lastName}` : 'Unknown',
+            registrationNumber: patient?.registrationNumber || '',
+          };
+        });
+      
+      setTodayAppointments(todayApts);
+    };
+    
+    loadTodayAppointments();
+    const interval = setInterval(loadTodayAppointments, 5000);
+    return () => clearInterval(interval);
+  }, []);
+  
+  // Call patient function
+  const handleCallPatient = async (appointmentId: string, patientId: string) => {
+    try {
+      // Check in the appointment
+      appointmentDb.checkIn(appointmentId);
+      
+      // Load the patient in doctor panel
+      await loadPatientData(patientId);
+      
+      // Close the appointments board
+      setShowAppointmentsBoard(false);
+      
+      // Dispatch event to update dashboard
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('patient-called', { 
+          detail: { patientId, appointmentId } 
+        }));
+      }
+    } catch (error) {
+      console.error('Error calling patient:', error);
+    }
+  };
+  
+  // Flag next patient
+  const handleFlagNextPatient = (patientId: string) => {
+    setNextPatientId(patientId);
+    
+    // Dispatch event to update dashboard
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('next-patient-flagged', { 
+        detail: { patientId } 
+      }));
+    }
+  };
 
   // Load smart parsing rules
   useEffect(() => {
@@ -933,6 +1242,45 @@ function DoctorPanelContent() {
     }
   };
 
+  useEffect(() => {
+    const joined = symptoms.join('\n');
+    setCaseText(joined);
+    if (isSystemAssist) {
+      analyzeCaseText(joined);
+    }
+  }, [symptoms]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleAddSymptom = () => {
+    const text = symptomInput.trim();
+    if (!text) return;
+    setSymptoms((prev) => [...prev, text]);
+    setSymptomInput('');
+  };
+
+  const handleSymptomKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleAddSymptom();
+    }
+  };
+
+  const startEditSymptom = (index: number) => {
+    setEditingSymptomIndex(index);
+  };
+
+  const commitEditSymptom = (index: number, value: string) => {
+    const val = value.trim();
+    setSymptoms((prev) => {
+      const next = [...prev];
+      next[index] = val;
+      return next;
+    });
+    setEditingSymptomIndex(null);
+  };
+
+  const removeSymptom = (index: number) => {
+    setSymptoms((prev) => prev.filter((_, i) => i !== index));
+  };
   const addCaseLine = (line: string) => {
     setCaseText(prev => prev + (prev ? '\n' : '') + line);
     setTimeout(() => {
@@ -1200,56 +1548,18 @@ function DoctorPanelContent() {
     // Handle Enter key - always prevent default to avoid form submission
     if (e.key === 'Enter') {
       e.preventDefault();
-      
-      // If suggestions are shown and one is selected, select it
-      if (showMedicineSuggestions && selectedSuggestionIndex >= 0 && medicineSuggestions[selectedSuggestionIndex]) {
-        selectMedicine(index, medicineSuggestions[selectedSuggestionIndex]);
-        return; // Don't add new row, just select and autofill
-      } else if (showMedicineSuggestions && medicineSuggestions.length > 0) {
-        // If suggestions are shown but none selected, select the first one
-        selectMedicine(index, medicineSuggestions[0]);
-        return; // Don't add new row, just select and autofill
-      }
-      
-      // No suggestions visible - try to load saved pattern for the entered medicine
-      const rx = prescriptions[index];
-      if (rx.medicine.trim()) {
-        // First try to load saved pattern from memory
-        const savedPattern = getMedicinePattern(rx.medicine, rx.potency || '');
-        if (savedPattern) {
-          // Apply saved pattern
-          setPrescriptions(prev => {
-            const updated = [...prev];
-            updated[index] = {
-              ...updated[index],
-              quantity: savedPattern.quantity,
-              doseForm: savedPattern.doseForm,
-              dosePattern: savedPattern.dosePattern,
-              frequency: savedPattern.frequency,
-              duration: savedPattern.duration,
-            };
-            return updated;
-          });
-        } else {
-          // No saved pattern - try smart parsing
-          const parsed = parseSmartEntry(rx.medicine, smartParsingRules);
-          if (parsed.medicine) {
-            setPrescriptions(prev => {
-              const updated = [...prev];
-              updated[index] = { ...updated[index], ...parsed };
-              return updated;
-            });
-          }
+      // If suggestions are shown, select current or first, then move to next field
+      if (showMedicineSuggestions && medicineSuggestions.length > 0) {
+        const choice = selectedSuggestionIndex >= 0 ? medicineSuggestions[selectedSuggestionIndex] : medicineSuggestions[0];
+        if (choice) {
+          selectMedicine(index, choice);
         }
-        // Save to custom medicines list
-        saveCustomMedicine(rx.medicine);
       }
-      
-      // Hide suggestions
       setShowMedicineSuggestions(false);
       setSelectedSuggestionIndex(-1);
       setFocusedMedicineIndex(null);
-      return; // Don't add new row on Enter - user can click "Add Medicine" button
+      focusNextFieldInRow(e);
+      return;
     }
     
     // Handle other keys when suggestions are shown
@@ -1345,18 +1655,59 @@ function DoctorPanelContent() {
   ) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      const rx = prescriptions[index];
-      if (rx.medicine.trim() && rx.potency) {
-        saveMedicineToMemory(rx.medicine, rx.potency, rx);
-        loadSavedPattern(index, rx.medicine, rx.potency);
-      }
-      // Add new row if on last row
-      if (index === totalRows - 1) {
-        addEmptyPrescriptionRow();
-      }
+      // Move to next field (do not add new row here)
+      focusNextFieldInRow(e);
     }
   };
 
+  const focusNextFieldInRow = (e: React.KeyboardEvent) => {
+    const target = e.currentTarget as HTMLElement;
+    const tr = target.closest('tr');
+    if (!tr) return;
+    const fields = Array.from(tr.querySelectorAll('input, select')) as HTMLElement[];
+    const i = fields.findIndex((el) => el === target);
+    if (i >= 0 && i < fields.length - 1) {
+      (fields[i + 1] as HTMLElement).focus();
+    }
+  };
+
+  const handleGenericEnterMove = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      focusNextFieldInRow(e);
+    }
+  };
+
+  const handleBottlesKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, index: number, totalRows: number) => {
+    const input = e.currentTarget;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      // On last field, Enter adds a new row and focuses first field
+      if (index === totalRows - 1) {
+        addEmptyPrescriptionRow();
+        setTimeout(() => {
+          try {
+            const table = input.closest('table');
+            const lastRow = table?.querySelector('tbody tr:last-child');
+            const firstField = lastRow?.querySelector('input, select') as HTMLElement | null;
+            firstField?.focus();
+          } catch {}
+        }, 0);
+      } else {
+        focusNextFieldInRow(e);
+      }
+    } else if (e.key === 'Backspace') {
+      // Allow clearing the field completely
+      if (input.value.length <= 1) {
+        e.preventDefault();
+        updatePrescriptionRow(index, 'bottles', undefined as unknown as number);
+        // Set input's value to empty string visually; React will reflect from state update
+        setTimeout(() => {
+          input.value = '';
+        }, 0);
+      }
+    }
+  };
   const handleOpenCombination = (index: number) => {
     // Toggle inline editing for combination
     if (editingCombinationIndex === index) {
@@ -1459,6 +1810,51 @@ function DoctorPanelContent() {
   
   // Handle smart parsing input field - parse and add new row on Enter
   const handleSmartParseInputKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (showSmartParseSuggestions) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSmartParseSelectedIndex(prev => prev < smartParseSuggestions.length - 1 ? prev + 1 : prev);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSmartParseSelectedIndex(prev => prev > 0 ? prev - 1 : -1);
+        return;
+      }
+      if (e.key === 'Delete') {
+        e.preventDefault();
+        const choice = smartParseSelectedIndex >= 0 ? smartParseSuggestions[smartParseSelectedIndex] : (smartParseSuggestions[0] || '');
+        if (choice.trim()) {
+          const nextHistory = smartParseHistory.filter(line => line.trim() !== choice.trim());
+          setSmartParseHistory(nextHistory);
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.setItem('smartParseHistory', JSON.stringify(nextHistory));
+            } catch {}
+          }
+          const nextSuggestions = smartParseSuggestions.filter(s => s.trim() !== choice.trim());
+          setSmartParseSuggestions(nextSuggestions);
+          setSmartParseSelectedIndex(-1);
+          setShowSmartParseSuggestions(nextSuggestions.length > 0);
+        }
+        return;
+      }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const choice = smartParseSelectedIndex >= 0 ? smartParseSuggestions[smartParseSelectedIndex] : (smartParseSuggestions[0] || '');
+      if (choice.trim()) {
+        // Fill the smart parsing field with selected suggestion without parsing
+        setSmartParseInput(choice.trim());
+        setShowSmartParseSuggestions(false);
+        setSmartParseSuggestions([]);
+        setSmartParseSelectedIndex(-1);
+        setTimeout(() => {
+          smartParseInputRef.current?.focus();
+        }, 0);
+        return;
+      }
+    }
+    }
     if (e.key === 'Enter' && smartParseInput.trim()) {
       e.preventDefault();
       
@@ -1502,6 +1898,13 @@ function DoctorPanelContent() {
             }
             
             setSmartParseInput('');
+            try {
+              const next = Array.from(new Set([smartParseInput.trim(), ...smartParseHistory]));
+              setSmartParseHistory(next);
+              if (typeof window !== 'undefined') {
+                localStorage.setItem('smartParseHistory', JSON.stringify(next));
+              }
+            } catch {}
             setTimeout(() => {
               smartParseInputRef.current?.focus();
             }, 0);
@@ -1542,6 +1945,13 @@ function DoctorPanelContent() {
       
       // Clear input and keep focus
       setSmartParseInput('');
+      try {
+        const next = Array.from(new Set([smartParseInput.trim(), ...smartParseHistory]));
+        setSmartParseHistory(next);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('smartParseHistory', JSON.stringify(next));
+        }
+      } catch {}
       setTimeout(() => {
         smartParseInputRef.current?.focus();
       }, 0);
@@ -1550,7 +1960,36 @@ function DoctorPanelContent() {
 
   // ===== SAVE FEE =====
   
+  // Normalize fee type to standard format for fee history
+  const normalizeFeeType = (feeTypeName: string): 'first-visit' | 'follow-up' | 'exempt' | 'consultation' | 'medicine' => {
+    const normalized = feeTypeName.toLowerCase().trim();
+    
+    // Check for keywords in the fee type name
+    if (normalized.includes('new') || normalized.includes('first')) {
+      return 'first-visit';
+    } else if (normalized.includes('follow')) {
+      return 'follow-up';
+    } else if (normalized.includes('exempt')) {
+      return 'exempt';
+    } else if (normalized.includes('medicine')) {
+      return 'medicine';
+    } else {
+      return 'consultation';
+    }
+  };
+  
   const handleSaveFee = () => {
+    console.log('[DoctorPanel] ========== handleSaveFee CALLED ==========');
+    console.log('[DoctorPanel] Current state:', {
+      patient: patient?.id,
+      feeAmount,
+      feeType,
+      feeTypeId,
+      paymentStatus,
+      savedVisitId,
+      appointmentId: todayAppointment?.id
+    });
+    
     if (!patient) return;
     
     const feeAmountNum = parseFloat(feeAmount) || 0;
@@ -1607,6 +2046,7 @@ function DoctorPanelContent() {
         feeAmount: feeAmountNum,
         feeType: feeType,
         feeId: feeRecordId,
+        isFreeFollowUp: (feeType === 'Free Follow Up') || (feeType === 'Follow Up' && feeAmountNum === 0),
       });
     }
     
@@ -1630,6 +2070,10 @@ function DoctorPanelContent() {
       console.log('[DoctorPanel] Synced fee to billing queue:', patientBillingItem.id);
     }
     
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('fees-updated', { detail: { patientId: patient.id, visitId: todayAppointment?.id } }));
+    }
+    
     // Update the visible fee info immediately
     setCurrentAppointmentFee(prev => prev ? {
       ...prev,
@@ -1651,24 +2095,164 @@ function DoctorPanelContent() {
       
       // Add to fee history when paid
       const existingFeeHistory = db.getAll('feeHistory') as FeeHistoryEntry[];
-      const todayFeeHistory = existingFeeHistory.find((fh) => 
-        fh.patientId === patient.id && 
-        fh.visitId === todayAppointment?.id
-      );
+      
+      // CLEANUP: Remove duplicate fee history entries for this VISIT (not just today)
+      // A patient can have multiple visits same day, so we match by visitId or appointmentId
+      
+      console.log('[DoctorPanel] Starting duplicate cleanup check...');
+      console.log('[DoctorPanel] Current criteria - savedVisitId:', savedVisitId, 'appointmentId:', todayAppointment?.id);
+      
+      const visitEntries = existingFeeHistory.filter((fh) => {
+        if (fh.patientId !== patient.id) return false;
+        
+        // Match by visitId (if we have one)
+        if (savedVisitId && fh.visitId === savedVisitId) {
+          console.log('[DoctorPanel] Found entry by visitId:', fh.id, 'feeType:', fh.feeType);
+          return true;
+        }
+        
+        // Match by appointmentId (if we have one)
+        if (todayAppointment?.id && fh.appointmentId === todayAppointment.id) {
+          console.log('[DoctorPanel] Found entry by appointmentId:', fh.id, 'feeType:', fh.feeType);
+          return true;
+        }
+        
+        return false;
+      });
+      
+      console.log('[DoctorPanel] Found', visitEntries.length, 'fee history entries for this visit');
+      
+      // If multiple entries exist for this visit, keep only one
+      if (visitEntries.length > 1) {
+        console.log('[DoctorPanel] ⚠️ Multiple fee history entries detected for this visit. Cleaning up...');
+        
+        // Sort by: 1) Has both visitId and appointmentId (best), 2) Has appointmentId, 3) Creation time (oldest first)
+        const sorted = [...visitEntries].sort((a, b) => {
+          const aScore = (a.visitId ? 2 : 0) + (a.appointmentId ? 1 : 0);
+          const bScore = (b.visitId ? 2 : 0) + (b.appointmentId ? 1 : 0);
+          if (aScore !== bScore) return bScore - aScore; // Higher score first
+          const dateA = new Date(a.paidDate).getTime();
+          const dateB = new Date(b.paidDate).getTime();
+          return dateA - dateB; // Oldest first
+        });
+        
+        // Keep the first one, delete the rest
+        const toKeep = sorted[0];
+        const toDelete = sorted.slice(1);
+        
+        console.log('[DoctorPanel] Keeping entry:', toKeep.id, 'Deleting:', toDelete.map(e => e.id));
+        
+        toDelete.forEach(entry => {
+          db.delete('feeHistory', entry.id);
+          console.log('[DoctorPanel] 🗑️ Deleted duplicate fee history entry:', entry.id);
+        });
+        
+        // Update the kept entry with latest values
+        const normalizedFeeType = normalizeFeeType(feeType);
+        
+        db.update('feeHistory', toKeep.id, {
+          amount: feeAmountNum,
+          feeType: normalizedFeeType,
+          visitId: savedVisitId || toKeep.visitId,
+          appointmentId: todayAppointment?.id || toKeep.appointmentId,
+          paymentStatus: 'paid',
+          updatedAt: new Date(),
+        });
+        console.log('[DoctorPanel] ✏️ Updated kept entry:', toKeep.id, 'with latest values, feeType:', normalizedFeeType);
+        
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('fees-updated', { detail: { patientId: patient.id, visitId: savedVisitId || todayAppointment?.id } }));
+        }
+      } else {
+      
+      // Find existing fee history by multiple criteria
+      console.log('[DoctorPanel] ========== DUPLICATE DETECTION START ==========');
+      console.log('[DoctorPanel] Looking for existing fee history. Criteria:', {
+        patientId: patient.id,
+        savedVisitId,
+        appointmentId: todayAppointment?.id,
+        existingFeeHistoryCount: existingFeeHistory.filter(fh => fh.patientId === patient.id).length
+      });
+      
+      // Log all existing fee history entries for this patient
+      console.log('[DoctorPanel] All existing fee history entries for patient:');
+      existingFeeHistory.filter(fh => fh.patientId === patient.id).forEach(fh => {
+        console.log('  -', {
+          id: fh.id,
+          visitId: fh.visitId,
+          appointmentId: fh.appointmentId,
+          amount: fh.amount,
+          feeType: fh.feeType,
+          paymentStatus: fh.paymentStatus
+        });
+      });
+      
+      // CRITICAL FIX: Match by appointmentId OR by today's date (for same-day entries)
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(today);
+      todayEnd.setHours(23, 59, 59, 999);
+      
+      const todayFeeHistory = existingFeeHistory.find((fh) => {
+        if (fh.patientId !== patient.id) return false;
+        
+        // Match by appointmentId (most reliable)
+        if (todayAppointment?.id && fh.appointmentId === todayAppointment.id) {
+          console.log('[DoctorPanel] ✓ Match found by appointmentId:', fh.id, 'appointmentId:', todayAppointment.id);
+          return true;
+        }
+        
+        // Match by visitId
+        if (savedVisitId && fh.visitId === savedVisitId) {
+          console.log('[DoctorPanel] ✓ Match found by savedVisitId:', fh.id, 'visitId:', savedVisitId);
+          return true;
+        }
+        
+        // Match by today's date (fallback for entries created today without visitId)
+        const fhDate = new Date(fh.paidDate);
+        if (fhDate >= today && fhDate <= todayEnd && !fh.visitId && !savedVisitId) {
+          console.log('[DoctorPanel] ✓ Match found by today date (no visitId):', fh.id);
+          return true;
+        }
+        
+        return false;
+      });
+      
+      console.log('[DoctorPanel] Found existing fee history?', !!todayFeeHistory, todayFeeHistory?.id);
+      console.log('[DoctorPanel] ========== DUPLICATE DETECTION END ==========');
       
       if (!todayFeeHistory) {
+        const newFeeHistoryId = `fh-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const normalizedFeeType = normalizeFeeType(feeType);
+        
         feeHistoryDb.create({
-          id: `fh-${Date.now()}`,
+          id: newFeeHistoryId,
           patientId: patient.id,
-          visitId: todayAppointment?.id,
-          receiptId: `RCP-${Date.now()}`,
-          feeType: feeType as 'first-visit' | 'follow-up' | 'exempt' | 'consultation' | 'medicine',
+          visitId: savedVisitId || todayAppointment?.id,
+          appointmentId: todayAppointment?.id,
+          receiptId: `RCP-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          feeType: normalizedFeeType,
           amount: feeAmountNum,
           paymentMethod: 'cash',
           paymentStatus: 'paid',
           paidDate: new Date(),
           daysSinceLastFee: lastFeeInfo ? lastFeeInfo.daysAgo : undefined,
         });
+        console.log('[DoctorPanel] ✅ CREATED NEW fee history entry:', newFeeHistoryId, 'visitId:', savedVisitId, 'appointmentId:', todayAppointment?.id, 'amount:', feeAmountNum, 'feeType:', normalizedFeeType);
+      } else {
+        // Update existing fee history entry instead of creating duplicate
+        const normalizedFeeType = normalizeFeeType(feeType);
+        
+        db.update('feeHistory', todayFeeHistory.id, {
+          amount: feeAmountNum,
+          feeType: normalizedFeeType,
+          visitId: savedVisitId || todayFeeHistory.visitId, // Update visitId if we have it now
+          appointmentId: todayAppointment?.id || todayFeeHistory.appointmentId, // Ensure appointmentId is set
+          paymentStatus: 'paid', // Ensure it's marked as paid
+          updatedAt: new Date(),
+        });
+        console.log('[DoctorPanel] ✏️ UPDATED existing fee history entry:', todayFeeHistory.id, 'New amount:', feeAmountNum, 'New feeType:', normalizedFeeType, 'visitId:', savedVisitId, 'paymentStatus: paid');
+      }
       }
     } else if (paymentStatus === 'pending') {
       setLastFeeInfo({
@@ -1766,19 +2350,31 @@ function DoctorPanelContent() {
       nextVisit: nextVisit ? new Date(nextVisit) : undefined,
       prognosis,
       remarksToFrontdesk,
+      bp: bp || undefined,
+      pulse: pulse || undefined,
+      tempF: tempF || undefined,
+      weightKg: weightKg || undefined,
       status: 'locked' as const, // Lock the visit
     };
 
-    // Create visit record
-    const savedVisit = doctorVisitDb.create(visitData);
-    setSavedVisitId(savedVisit.id);
+    let visitIdToUse: string;
+    if (savedVisitId) {
+      doctorVisitDb.update(savedVisitId, visitData);
+      visitIdToUse = savedVisitId;
+    } else {
+      const savedVisit = doctorVisitDb.create(visitData);
+      setSavedVisitId(savedVisit.id);
+      visitIdToUse = savedVisit.id;
+    }
 
     // Save prescriptions
     const prescriptionIds: string[] = [];
+    const existingRx = doctorPrescriptionDb.getByVisit(visitIdToUse);
     prescriptions.forEach((rx, index) => {
-      if (rx.medicine.trim()) {
-        const savedRx = doctorPrescriptionDb.create({
-          visitId: savedVisit.id,
+      if (!rx.medicine.trim()) return;
+      if (index < existingRx.length) {
+        const existing = existingRx[index];
+        doctorPrescriptionDb.update(existing.id, {
           patientId: patient.id,
           medicine: rx.medicine,
           potency: rx.potency,
@@ -1795,7 +2391,27 @@ function DoctorPanelContent() {
           combinationName: rx.combinationName,
           combinationContent: rx.combinationContent,
         });
-        prescriptionIds.push(savedRx.id);
+        prescriptionIds.push(existing.id);
+      } else {
+        const created = doctorPrescriptionDb.create({
+          visitId: visitIdToUse,
+          patientId: patient.id,
+          medicine: rx.medicine,
+          potency: rx.potency,
+          quantity: rx.quantity,
+          doseForm: rx.doseForm,
+          dosePattern: rx.dosePattern,
+          frequency: rx.frequency,
+          duration: rx.duration,
+          durationDays: rx.durationDays,
+          bottles: rx.bottles,
+          instructions: rx.instructions,
+          rowOrder: index,
+          isCombination: rx.isCombination,
+          combinationName: rx.combinationName,
+          combinationContent: rx.combinationContent,
+        });
+        prescriptionIds.push(created.id);
       }
     });
 
@@ -1820,7 +2436,7 @@ function DoctorPanelContent() {
       db.create('fees', {
         id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         patientId: patient.id,
-        visitId: savedVisit.id,
+        visitId: visitIdToUse,
         amount: feeAmountNum,
         feeType: feeType,
         paymentStatus: paymentStatus,
@@ -1833,20 +2449,45 @@ function DoctorPanelContent() {
       });
     }
 
-    // If fee is paid, add to fee history
+    // If fee is paid, add to fee history (check for duplicates first)
     if (paymentStatus === 'paid') {
-      feeHistoryDb.create({
-        id: `fh-${Date.now()}`,
-        patientId: patient.id,
-        visitId: savedVisit.id,
-        receiptId: `RCP-${Date.now()}`,
-        feeType: feeType as 'first-visit' | 'follow-up' | 'exempt' | 'consultation' | 'medicine',
-        amount: finalAmount,
-        paymentMethod: 'cash',
-        paymentStatus: 'paid',
-        paidDate: new Date(),
-        daysSinceLastFee: lastFeeInfo ? lastFeeInfo.daysAgo : undefined,
-      });
+      const existingFeeHistory = db.getAll('feeHistory') as FeeHistoryEntry[];
+      const duplicateFeeHistory = existingFeeHistory.find((fh) => 
+        fh.patientId === patient.id && (
+          fh.visitId === visitIdToUse ||
+          (currentAppointmentFee?.appointmentId && fh.appointmentId === currentAppointmentFee.appointmentId)
+        )
+      );
+      
+      if (!duplicateFeeHistory) {
+        const normalizedFeeType = normalizeFeeType(feeType);
+        feeHistoryDb.create({
+          id: `fh-${Date.now()}`,
+          patientId: patient.id,
+          visitId: visitIdToUse,
+          appointmentId: currentAppointmentFee?.appointmentId,
+          receiptId: `RCP-${Date.now()}`,
+          feeType: normalizedFeeType,
+          amount: finalAmount,
+          paymentMethod: 'cash',
+          paymentStatus: 'paid',
+          paidDate: new Date(),
+          daysSinceLastFee: lastFeeInfo ? lastFeeInfo.daysAgo : undefined,
+        });
+        console.log('[DoctorPanel] handleEndConsultation - Created fee history entry');
+      } else {
+        // Update existing entry
+        const normalizedFeeType = normalizeFeeType(feeType);
+        db.update('feeHistory', duplicateFeeHistory.id, {
+          amount: finalAmount,
+          feeType: normalizedFeeType,
+          visitId: visitIdToUse,
+          appointmentId: currentAppointmentFee?.appointmentId || duplicateFeeHistory.appointmentId,
+          paymentStatus: 'paid',
+          updatedAt: new Date(),
+        });
+        console.log('[DoctorPanel] handleEndConsultation - Updated existing fee history entry');
+      }
     }
 
     // Update appointment fee status if exists
@@ -1860,6 +2501,7 @@ function DoctorPanelContent() {
           feeStatus: paymentStatus,
           feeAmount: feeAmountNum,
           feeType: feeType,
+          isFreeFollowUp: (feeType === 'Free Follow Up') || (feeType === 'Follow Up' && feeAmountNum === 0),
         });
       }
     }
@@ -1883,10 +2525,194 @@ function DoctorPanelContent() {
       });
       console.log('[DoctorPanel] Synced fee to billing queue on end consultation:', patientBillingItem.id);
     }
+    
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('fees-updated', { detail: { patientId: patient.id, visitId: savedVisitId } }));
+    }
 
     // Mark consultation as ended and show preview popup
     setIsConsultationEnded(true);
     setShowPrescriptionPreview(true);
+  };
+  
+  const handleSaveConsultation = () => {
+    if (!patient || !currentVisit) return;
+    const pendingInput = symptomInput.trim();
+    const finalSymptoms = pendingInput ? [...symptoms, pendingInput] : symptoms;
+    const finalCaseText = finalSymptoms.join('\n');
+    const visitData = {
+      patientId: patient.id,
+      visitDate: new Date(),
+      visitNumber: currentVisit.visitNumber,
+      chiefComplaint: finalCaseText.split('\n')[0] || '',
+      caseText: finalCaseText,
+      diagnosis,
+      advice,
+      testsRequired,
+      nextVisit: nextVisit ? new Date(nextVisit) : undefined,
+      prognosis,
+      remarksToFrontdesk,
+      bp: bp || undefined,
+      pulse: pulse || undefined,
+      tempF: tempF || undefined,
+      weightKg: weightKg || undefined,
+      status: 'active' as const,
+    };
+    
+    // Always update if we have a savedVisitId, never create duplicate
+    if (savedVisitId) {
+      doctorVisitDb.update(savedVisitId, visitData);
+      const existingRx = doctorPrescriptionDb.getByVisit(savedVisitId);
+      prescriptions.forEach((rx, index) => {
+        if (!rx.medicine.trim()) return;
+        if (index < existingRx.length) {
+          const existing = existingRx[index];
+          doctorPrescriptionDb.update(existing.id, {
+            patientId: patient.id,
+            medicine: rx.medicine,
+            potency: rx.potency,
+            quantity: rx.quantity,
+            doseForm: rx.doseForm,
+            dosePattern: rx.dosePattern,
+            frequency: rx.frequency,
+            duration: rx.duration,
+            durationDays: rx.durationDays,
+            bottles: rx.bottles,
+            instructions: rx.instructions,
+            rowOrder: index,
+            isCombination: rx.isCombination,
+            combinationName: rx.combinationName,
+            combinationContent: rx.combinationContent,
+          });
+        } else {
+          doctorPrescriptionDb.create({
+            visitId: savedVisitId,
+            patientId: patient.id,
+            medicine: rx.medicine,
+            potency: rx.potency,
+            quantity: rx.quantity,
+            doseForm: rx.doseForm,
+            dosePattern: rx.dosePattern,
+            frequency: rx.frequency,
+            duration: rx.duration,
+            durationDays: rx.durationDays,
+            bottles: rx.bottles,
+            instructions: rx.instructions,
+            rowOrder: index,
+            isCombination: rx.isCombination,
+            combinationName: rx.combinationName,
+            combinationContent: rx.combinationContent,
+          });
+        }
+      });
+    } else {
+      // Check if a visit already exists for this patient today before creating
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(today);
+      todayEnd.setHours(23, 59, 59, 999);
+      
+      const allVisits = doctorVisitDb.getByPatient(patient.id) as DoctorVisit[];
+      const todayVisit = allVisits.find((v) => {
+        const vDate = new Date(v.visitDate);
+        return vDate >= today && vDate <= todayEnd && v.status === 'active';
+      });
+      
+      if (todayVisit) {
+        // Use existing visit instead of creating duplicate
+        console.log('[DoctorPanel] Using existing visit instead of creating duplicate:', todayVisit.id);
+        setSavedVisitId(todayVisit.id);
+        doctorVisitDb.update(todayVisit.id, visitData);
+        
+        const existingRx = doctorPrescriptionDb.getByVisit(todayVisit.id);
+        prescriptions.forEach((rx, index) => {
+          if (!rx.medicine.trim()) return;
+          if (index < existingRx.length) {
+            doctorPrescriptionDb.update(existingRx[index].id, {
+              patientId: patient.id,
+              medicine: rx.medicine,
+              potency: rx.potency,
+              quantity: rx.quantity,
+              doseForm: rx.doseForm,
+              dosePattern: rx.dosePattern,
+              frequency: rx.frequency,
+              duration: rx.duration,
+              durationDays: rx.durationDays,
+              bottles: rx.bottles,
+              instructions: rx.instructions,
+              rowOrder: index,
+              isCombination: rx.isCombination,
+              combinationName: rx.combinationName,
+              combinationContent: rx.combinationContent,
+            });
+          } else {
+            doctorPrescriptionDb.create({
+              visitId: todayVisit.id,
+              patientId: patient.id,
+              medicine: rx.medicine,
+              potency: rx.potency,
+              quantity: rx.quantity,
+              doseForm: rx.doseForm,
+              dosePattern: rx.dosePattern,
+              frequency: rx.frequency,
+              duration: rx.duration,
+              durationDays: rx.durationDays,
+              bottles: rx.bottles,
+              instructions: rx.instructions,
+              rowOrder: index,
+              isCombination: rx.isCombination,
+              combinationName: rx.combinationName,
+              combinationContent: rx.combinationContent,
+            });
+          }
+        });
+      } else {
+        // No existing visit, create new one
+        const savedVisit = doctorVisitDb.create(visitData);
+        setSavedVisitId(savedVisit.id);
+        prescriptions.forEach((rx, index) => {
+          if (rx.medicine.trim()) {
+            doctorPrescriptionDb.create({
+              visitId: savedVisit.id,
+              patientId: patient.id,
+              medicine: rx.medicine,
+              potency: rx.potency,
+              quantity: rx.quantity,
+              doseForm: rx.doseForm,
+              dosePattern: rx.dosePattern,
+              frequency: rx.frequency,
+              duration: rx.duration,
+              durationDays: rx.durationDays,
+              bottles: rx.bottles,
+              instructions: rx.instructions,
+              rowOrder: index,
+              isCombination: rx.isCombination,
+              combinationName: rx.combinationName,
+              combinationContent: rx.combinationContent,
+            });
+          }
+        });
+      }
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('pharmacy-queue-updated'));
+    }
+    setShowSaveNotice(true);
+    setTimeout(() => setShowSaveNotice(false), 3000);
+    // Update today's appointment to case taking (in-progress)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(today);
+    todayEnd.setHours(23, 59, 59, 999);
+    const appointments = appointmentDb.getByPatient(patient.id) as Appointment[];
+    const todayAppointment = appointments.find((apt: Appointment) => {
+      const aptDate = new Date(apt.appointmentDate);
+      return aptDate >= today && aptDate <= todayEnd && 
+             (apt.status === 'checked-in' || apt.status === 'scheduled' || apt.status === 'in-progress');
+    });
+    if (todayAppointment && todayAppointment.status !== 'in-progress') {
+      appointmentDb.update(todayAppointment.id, { status: 'in-progress' });
+    }
   };
 
   // Send prescription to pharmacy queue
@@ -1919,17 +2745,45 @@ function DoctorPanelContent() {
       }
     }
     
-    // Add to pharmacy queue with appointment ID
-    pharmacyQueueDb.create({
-      visitId: savedVisitId,
-      patientId: patient.id,
-      appointmentId: appointmentIdToUse,
-      prescriptionIds: [],
-      priority: false,
-      status: 'pending',
-    });
+    // Reuse existing queue item if present to preserve preparedPrescriptionIds
+    const existingQueueItem = pharmacyQueueDb.getByVisit(savedVisitId);
+    if (existingQueueItem) {
+      pharmacyQueueDb.update(existingQueueItem.id, {
+        status: 'pending',
+      });
+    } else {
+      // Add to pharmacy queue with appointment ID
+      pharmacyQueueDb.create({
+        visitId: savedVisitId,
+        patientId: patient.id,
+        appointmentId: appointmentIdToUse,
+        prescriptionIds: [],
+        priority: false,
+        status: 'pending',
+      });
+    }
     
     setPharmacySent(true);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('pharmacy-queue-updated'));
+    }
+    // Update today's appointment status to medicines-prepared (Sent to pharmacy)
+    let aptIdToUpdate = currentAppointmentFee?.appointmentId;
+    if (!aptIdToUpdate) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(today);
+      todayEnd.setHours(23, 59, 59, 999);
+      const appointments = appointmentDb.getByPatient(patient.id) as Appointment[];
+      const todayAppointment = appointments.find((apt: Appointment) => {
+        const aptDate = new Date(apt.appointmentDate);
+        return aptDate >= today && aptDate <= todayEnd;
+      });
+      aptIdToUpdate = todayAppointment?.id;
+    }
+    if (aptIdToUpdate) {
+      appointmentDb.update(aptIdToUpdate, { status: 'sent-to-pharmacy' });
+    }
   };
 
   // Bypass pharmacy and send directly to billing
@@ -1937,7 +2791,7 @@ function DoctorPanelContent() {
     if (!savedVisitId || !patient) return;
     
     // Always read fresh fee from appointment database to avoid stale state issues
-    let feeAmount = 300; // Default follow-up fee
+    let feeAmount = 300;
     let feeType = 'Follow Up';
     let paymentStatus = 'pending';
     let appointmentIdToUse = currentAppointmentFee?.appointmentId;
@@ -1968,10 +2822,29 @@ function DoctorPanelContent() {
         paymentStatus = apt.feeStatus;
       }
       console.log('[DoctorPanel] handleSendToBilling - Using fee from appointment:', feeAmount, feeType, paymentStatus);
-    } else if (currentVisit && currentVisit.visitNumber === 1) {
-      // Fallback to visit type based fee only if no appointment
-      feeAmount = 500;
-      feeType = 'New Patient';
+    }
+    
+    // If no appointment fee, prefer the fee saved in doctor panel for this visit/patient
+    const allFees = db.getAll('fees') as any[];
+    const patientFees = allFees.filter((f) => f.patientId === patient.id);
+    const feeByVisit = patientFees.find((f) => f.visitId === savedVisitId);
+    if (feeByVisit) {
+      feeAmount = typeof feeByVisit.amount === 'number' ? feeByVisit.amount : feeAmount;
+      feeType = feeByVisit.feeType || feeType;
+      paymentStatus = feeByVisit.paymentStatus || paymentStatus;
+    } else {
+      // Use latest fee saved for this patient if available
+      const latestFee = patientFees
+        .sort((a, b) => new Date(b.updatedAt || b.createdAt || new Date()).getTime() - new Date(a.updatedAt || a.createdAt || new Date()).getTime())[0];
+      if (latestFee) {
+        feeAmount = typeof latestFee.amount === 'number' ? latestFee.amount : feeAmount;
+        feeType = latestFee.feeType || feeType;
+        paymentStatus = latestFee.paymentStatus || paymentStatus;
+      } else if (currentVisit && currentVisit.visitNumber === 1) {
+        // Final fallback only when no fee saved
+        feeAmount = 500;
+        feeType = 'New Patient';
+      }
     }
     
     // Create billing queue item directly
@@ -2001,6 +2874,7 @@ function DoctorPanelContent() {
     setCurrentVisit(null);
     setPrescriptions([]);
     setCaseText('');
+    setSymptoms([]);
     setDiagnosis('');
     setAdvice('');
     setTestsRequired('');
@@ -2085,7 +2959,10 @@ Dr. Homeopathic Clinic`);
   // ===== PAST HISTORY =====
 
   const repeatPastVisit = (visit: Visit) => {
-    if (visit.caseText) setCaseText(visit.caseText);
+    if (visit.caseText) {
+      setCaseText(visit.caseText);
+      setSymptoms(visit.caseText.split('\n').filter((s) => s.trim().length > 0));
+    }
     if (visit.diagnosis) setDiagnosis(visit.diagnosis);
     if (visit.advice) setAdvice(visit.advice);
     setShowPastVisitsPopup(false);
@@ -2316,94 +3193,189 @@ Dr. Homeopathic Clinic`);
       <Sidebar />
       
       <div className={`transition-all duration-300 ${sidebarCollapsed ? 'ml-16' : 'ml-64'}`}>
-        {/* No Patient Selected - Show Search */}
-        {!patient && (
-          <div className="flex items-center justify-center min-h-[calc(100vh-100px)]">
-            <div className="text-center max-w-md w-full px-4">
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
-                <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <svg className="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                </div>
-                <h2 className="text-xl font-bold text-gray-800 mb-2">Select Patient</h2>
-                <p className="text-gray-600 mb-6">Search for a patient to begin case taking</p>
-                
-                <div className="relative">
-                  <input
-                    ref={searchInputRef}
-                    type="text"
-                    placeholder="Search by name, reg number, or mobile..."
-                    value={searchQuery}
-                    onChange={handleSearchChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 pl-10"
-                  />
-                  <svg className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                  
-                  {/* Search Results Dropdown */}
-                  {showSearchResults && (
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 overflow-y-auto z-50">
-                      {searchResults.length > 0 ? (
-                        searchResults.map((p) => (
-                          <button
-                            key={p.id}
-                            onClick={() => handleSelectPatient(p)}
-                            className="w-full text-left px-4 py-3 hover:bg-gray-50 border-b border-gray-100 last:border-b-0"
-                          >
-                            <div className="font-medium text-gray-900">{p.firstName} {p.lastName}</div>
-                            <div className="text-sm text-gray-500">
-                              Reg: {p.registrationNumber} • {p.mobile} • {p.age}yrs • {p.gender}
-                            </div>
-                          </button>
-                        ))
-                      ) : (
-                        <div className="px-4 py-3 text-gray-500 text-sm">No patients found</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
+        {showSaveNotice && (
+          <div className="fixed top-4 right-4 z-50">
+            <div className="px-4 py-2 bg-green-600 text-white rounded shadow">
+              Case saved
             </div>
           </div>
         )}
-
-        {/* Patient Selected - Show Doctor Panel */}
-        {patient && (
-          <>
+        {/* Doctor Panel */}
+        <>
             {/* Header with Patient Context */}
             <header className="bg-white shadow-sm border-b border-gray-200 px-6 py-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-6">
                   <h1 className="text-xl font-bold text-gray-800">Doctor Panel</h1>
                   
-                  {/* Patient Info Card */}
-                  <div className="flex items-center gap-4 bg-blue-50 px-4 py-2 rounded-lg">
-                    <div>
-                      <p className="text-sm font-medium text-blue-800">
-                        {patient.firstName} {patient.lastName}
-                      </p>
-                      <p className="text-xs text-blue-600">
-                        Reg: {patient.registrationNumber} | {patient.age}yrs | {patient.gender}
-                      </p>
+                  {/* Patient Info Card or Placeholder */}
+                  {patient ? (
+                    <div className="relative patient-menu-container">
+                      <div className="flex items-center gap-4 bg-blue-50 px-4 py-2 rounded-lg">
+                        <div className="flex-1 cursor-pointer" onClick={() => setShowPatientMenu(!showPatientMenu)}>
+                          <p className="text-sm font-medium text-blue-800">
+                            {patient.firstName} {patient.lastName}
+                            <svg className="inline-block w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </p>
+                          <p className="text-xs text-blue-600">
+                            Reg: {patient.registrationNumber} | {patient.age ? `${patient.age}yrs` : ''} | {patient.gender}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs text-gray-500">Mobile</p>
+                          <p className="text-sm font-medium">{patient.mobile}</p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setPatient(null);
+                            router.push('/doctor-panel');
+                          }}
+                          className="ml-2 p-1 text-gray-400 hover:text-gray-600"
+                        >
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                      
+                      {/* Dropdown Menu */}
+                      {showPatientMenu && (
+                        <div className="absolute top-full left-0 mt-1 w-64 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
+                          <button
+                            onClick={() => {
+                              setShowPatientMenu(false);
+                              setShowEditPatientForm(true);
+                            }}
+                            className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2 rounded-t-lg"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                            Edit Patient Details
+                          </button>
+                          <button
+                            onClick={() => {
+                              setShowPatientMenu(false);
+                              router.push(`/patients/${patient.id}`);
+                            }}
+                            className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2 rounded-b-lg"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                            </svg>
+                            View Patient Profile
+                          </button>
+                        </div>
+                      )}
                     </div>
-                    <div className="text-right">
-                      <p className="text-xs text-gray-500">Mobile</p>
-                      <p className="text-sm font-medium">{patient.mobile}</p>
+                  ) : (
+                    <div className="flex items-center gap-4 bg-blue-50 px-4 py-2 rounded-lg">
+                      <div>
+                        <p className="text-sm font-medium text-blue-800">No patient selected</p>
+                        <p className="text-xs text-blue-600">Use search to select a patient</p>
+                      </div>
                     </div>
-                    <button
-                      onClick={() => {
-                        setPatient(null);
-                        router.push('/doctor-panel');
-                      }}
-                      className="ml-2 p-1 text-gray-400 hover:text-gray-600"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
+                  )}
+                  
+                  {/* Edit Patient Form */}
+                  {showEditPatientForm && patient && (
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 mt-2">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-semibold text-gray-900">Edit Patient Details</h3>
+                        <button
+                          onClick={() => setShowEditPatientForm(false)}
+                          className="text-gray-400 hover:text-gray-600"
+                        >
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">First Name</label>
+                          <input
+                            type="text"
+                            defaultValue={patient.firstName}
+                            id="edit-firstName"
+                            className="w-full px-2 py-1 text-sm border border-gray-200 rounded focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">Last Name</label>
+                          <input
+                            type="text"
+                            defaultValue={patient.lastName}
+                            id="edit-lastName"
+                            className="w-full px-2 py-1 text-sm border border-gray-200 rounded focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">Mobile</label>
+                          <input
+                            type="text"
+                            defaultValue={patient.mobile}
+                            id="edit-mobile"
+                            className="w-full px-2 py-1 text-sm border border-gray-200 rounded focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">Age</label>
+                          <input
+                            type="number"
+                            defaultValue={patient.age}
+                            id="edit-age"
+                            className="w-full px-2 py-1 text-sm border border-gray-200 rounded focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex gap-2 mt-3">
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={() => {
+                            const firstName = (document.getElementById('edit-firstName') as HTMLInputElement)?.value;
+                            const lastName = (document.getElementById('edit-lastName') as HTMLInputElement)?.value;
+                            const mobile = (document.getElementById('edit-mobile') as HTMLInputElement)?.value;
+                            const age = parseInt((document.getElementById('edit-age') as HTMLInputElement)?.value || '0');
+                            
+                            if (firstName && lastName && mobile) {
+                              patientDb.update(patient.id, {
+                                firstName,
+                                lastName,
+                                fullName: `${firstName} ${lastName}`,
+                                mobileNumber: mobile,
+                                age,
+                              });
+                              
+                              // Update local state
+                              setPatient({
+                                ...patient,
+                                firstName,
+                                lastName,
+                                mobile,
+                                age,
+                              });
+                              
+                              setShowEditPatientForm(false);
+                              alert('Patient details updated successfully!');
+                            }
+                          }}
+                        >
+                          Save Changes
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => setShowEditPatientForm(false)}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Visit Stats */}
                   <div className="flex items-center gap-3 text-sm">
@@ -2416,13 +3388,14 @@ Dr. Homeopathic Clinic`);
                   </div>
                 </div>
 
-                {/* Action Buttons */}
+                {/* Left-side Controls: Past Visits + Pharmacy Queue + Appointments */}
                 <div className="flex items-center gap-3">
                   <button
-                    onClick={() => setShowPharmacyQueue(!showPharmacyQueue)}
-                    className="px-4 py-2 text-sm bg-purple-50 text-purple-700 rounded-lg hover:bg-purple-100"
+                    onClick={() => setShowAppointmentsBoard(true)}
+                    className="px-4 py-2 text-sm bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200 transition-colors"
+                    title="View Today's Appointments"
                   >
-                    Pharmacy Queue ({3})
+                    Appointments
                   </button>
                   <button
                     onClick={openPastVisitsPopup}
@@ -2431,11 +3404,77 @@ Dr. Homeopathic Clinic`);
                     Past Visits ({pastVisits.length})
                   </button>
                   <button
-                    onClick={() => setShowMateriaMedica(!showMateriaMedica)}
-                    className="px-4 py-2 text-sm bg-green-50 text-green-700 rounded-lg hover:bg-green-100"
+                    onClick={() => setShowPharmacyMini(true)}
+                    className="px-4 py-2 text-sm bg-indigo-100 text-indigo-700 rounded-lg hover:bg-indigo-200 transition-colors"
+                    title="Open Pharmacy Queue Window"
                   >
-                    Materia Medica
+                    Pharmacy Queue ({pharmacyLiveItems.length})
                   </button>
+                </div>
+                {/* Header Search */}
+                <div className="relative w-96">
+                  <input
+                    ref={searchInputRef}
+                    type="text"
+                    placeholder="Search by name, reg number, or mobile..."
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setActiveSearchIndex(-1);
+                      handleSearchChange(e);
+                    }}
+                    onKeyDown={(e) => {
+                      if (!showSearchResults) return;
+                      const max = searchResults.length - 1;
+                      if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        const next = Math.min(activeSearchIndex + 1, max);
+                        setActiveSearchIndex(next);
+                        const el = searchItemRefs.current[next];
+                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                      } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        const prev = Math.max(activeSearchIndex - 1, 0);
+                        setActiveSearchIndex(prev);
+                        const el = searchItemRefs.current[prev];
+                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                      } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const indexToUse = activeSearchIndex >= 0 ? activeSearchIndex : 0;
+                        const chosen = searchResults[indexToUse];
+                        if (chosen) {
+                          handleSelectPatient(chosen);
+                          setActiveSearchIndex(-1);
+                        }
+                      }
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 pl-10"
+                  />
+                  <svg className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                  {showSearchResults && (
+                    <div ref={searchListRef} className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 overflow-y-auto z-50">
+                      {searchResults.length > 0 ? (
+                        searchResults.map((p, index) => (
+                          <button
+                            key={p.id}
+                            ref={(el) => { searchItemRefs.current[index] = el; }}
+                            onClick={() => handleSelectPatient(p)}
+                            className={`w-full text-left px-4 py-2 border-b border-gray-100 last:border-b-0 ${
+                              activeSearchIndex === index ? 'bg-blue-50' : 'hover:bg-gray-50'
+                            }`}
+                          >
+                            <div className="font-medium text-gray-900">{p.firstName} {p.lastName}</div>
+                            <div className="text-sm text-gray-500">
+                              Reg: {p.registrationNumber} • {p.mobile} • {p.age ? `${p.age}yrs` : ''} • {p.gender}
+                            </div>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="px-4 py-3 text-gray-500 text-sm">No patients found</div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </header>
@@ -2461,25 +3500,70 @@ Dr. Homeopathic Clinic`);
                     </div>
                   </div>
                   
-                  <div className="p-6">
-                    <textarea
-                      ref={caseTextRef}
-                      value={caseText}
-                      onChange={handleCaseTextChange}
-                      placeholder="Type case symptoms here...&#10;Press Enter for new symptom&#10;&#10;Example:&#10;Pain in knee joints&#10;Worse in cold weather&#10;Better by motion"
-                      className="w-full h-64 p-4 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
-                    />
-                    
-                    {isSystemAssist && (
-                      <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
-                        <p className="text-sm text-amber-700 font-medium mb-2">💡 Suggestions</p>
-                        <ul className="text-sm text-amber-600 space-y-1">
-                          <li>• Consider asking about timing (morning/evening)</li>
-                          <li>• Explore aggravating/ameliorating factors</li>
-                          <li>• Ask about appetite, thirst, sleep</li>
-                        </ul>
+                  <div className="p-4">
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap gap-2">
+                        {symptoms.map((sym, index) => (
+                          <div key={`${index}-${sym}`} className="inline-flex items-center gap-2 px-2 py-1 rounded-lg border border-gray-300 bg-gray-50">
+                            {editingSymptomIndex === index ? (
+                              <input
+                                autoFocus
+                                type="text"
+                                defaultValue={sym}
+                                onBlur={(e) => commitEditSymptom(index, e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    commitEditSymptom(index, (e.target as HTMLInputElement).value);
+                                  }
+                                }}
+                                className="px-2 py-1 border border-gray-200 rounded text-sm"
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => startEditSymptom(index)}
+                                className="text-sm text-gray-800"
+                                title="Edit symptom"
+                              >
+                                {sym}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => removeSymptom(index)}
+                              className="text-gray-400 hover:text-red-600"
+                              title="Remove symptom"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
                       </div>
-                    )}
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={symptomInput}
+                          onChange={(e) => setSymptomInput(e.target.value)}
+                          onKeyDown={handleSymptomKeyDown}
+                          placeholder="Type symptom and press Enter"
+                          className="flex-1 px-3 py-2"
+                        />
+                        <Button variant="secondary" onClick={handleAddSymptom}>Add</Button>
+                      </div>
+                      <p className="text-xs text-gray-500">
+                        Tip: Press Enter to enclose as one symptom. Click a pill to edit; use × to delete.
+                      </p>
+                      {isSystemAssist && (
+                        <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                          <p className="text-sm text-amber-700 font-medium mb-2">💡 Suggestions</p>
+                          <ul className="text-sm text-amber-600 space-y-1">
+                            <li>• Consider asking about timing (morning/evening)</li>
+                            <li>• Explore aggravating/ameliorating factors</li>
+                            <li>• Ask about appetite, thirst, sleep</li>
+                          </ul>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </section>
 
@@ -2517,12 +3601,50 @@ Dr. Homeopathic Clinic`);
                           ref={smartParseInputRef}
                           type="text"
                           value={smartParseInput}
-                          onChange={(e) => setSmartParseInput(e.target.value)}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setSmartParseInput(val);
+                                  const q = val.trim().toLowerCase();
+                                  if (q.length > 0) {
+                                    const matches = smartParseHistory
+                                      .filter(line => line.toLowerCase().includes(q))
+                                      .slice(0, 10);
+                                    setSmartParseSuggestions(matches);
+                                    setShowSmartParseSuggestions(matches.length > 0);
+                                    setSmartParseSelectedIndex(-1);
+                                  } else {
+                                    setSmartParseSuggestions([]);
+                                    setShowSmartParseSuggestions(false);
+                                    setSmartParseSelectedIndex(-1);
+                                  }
+                                }}
                           onKeyDown={handleSmartParseInputKeyDown}
                           placeholder={aiParsingEnabled && aiApiKey ? "AI Smart Parse: Type prescription and press Enter" : "Smart Parse: Type \"Arnica 200 2dr 4 pills TDS for 7 days\" and press Enter"}
                           className="w-full px-4 py-2.5 border border-amber-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 bg-amber-50 text-sm"
                           disabled={isAiParsing}
                         />
+                              {showSmartParseSuggestions && smartParseSuggestions.length > 0 && (
+                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-40 overflow-y-auto z-[60]">
+                                  {smartParseSuggestions.map((s, i) => (
+                                    <button
+                                      key={`${i}-${s}`}
+                                      onClick={() => {
+                                        setSmartParseInput(s.trim());
+                                        setShowSmartParseSuggestions(false);
+                                        setSmartParseSuggestions([]);
+                                        setSmartParseSelectedIndex(-1);
+                                        setTimeout(() => {
+                                          smartParseInputRef.current?.focus();
+                                        }, 0);
+                                      }}
+                                      className={`w-full text-left px-3 py-1 text-xs hover:bg-gray-50 ${i === smartParseSelectedIndex ? 'bg-blue-50 text-blue-700' : ''}`}
+                                      title={s}
+                                    >
+                                      {s}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
                         <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 text-xs text-amber-600">
                           {isAiParsing ? (
                             <span className="flex items-center gap-1">
@@ -2742,6 +3864,7 @@ Dr. Homeopathic Clinic`);
                                 list="quantity-list"
                                 value={rx.quantity}
                                 onChange={(e) => updatePrescriptionRow(index, 'quantity', e.target.value)}
+                                onKeyDown={handleGenericEnterMove}
                                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
                               />
                             </td>
@@ -2749,6 +3872,7 @@ Dr. Homeopathic Clinic`);
                               <select
                                 value={rx.doseForm || 'Pills'}
                                 onChange={(e) => updatePrescriptionRow(index, 'doseForm', e.target.value)}
+                                onKeyDown={handleGenericEnterMove}
                                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
                               >
                                 {prescriptionSettings.doseForm.map((form) => (
@@ -2762,6 +3886,7 @@ Dr. Homeopathic Clinic`);
                                 list="pattern-list"
                                 value={rx.dosePattern}
                                 onChange={(e) => updatePrescriptionRow(index, 'dosePattern', e.target.value)}
+                                onKeyDown={handleGenericEnterMove}
                                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
                               />
                             </td>
@@ -2771,6 +3896,7 @@ Dr. Homeopathic Clinic`);
                                 list="frequency-list"
                                 value={rx.frequency}
                                 onChange={(e) => updatePrescriptionRow(index, 'frequency', e.target.value)}
+                                onKeyDown={handleGenericEnterMove}
                                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
                               />
                             </td>
@@ -2781,14 +3907,24 @@ Dr. Homeopathic Clinic`);
                                 value={rx.duration || ''}
                                 onChange={(e) => updatePrescriptionRow(index, 'duration', e.target.value)}
                                 placeholder="7 days"
+                                onKeyDown={handleGenericEnterMove}
                                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
                               />
                             </td>
                             <td className="py-2">
                               <input
                                 type="number"
-                                value={rx.bottles || 1}
-                                onChange={(e) => updatePrescriptionRow(index, 'bottles', parseInt(e.target.value))}
+                                value={rx.bottles ?? ''}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val === '') {
+                                    updatePrescriptionRow(index, 'bottles', undefined as unknown as number);
+                                  } else {
+                                    const num = parseInt(val);
+                                    updatePrescriptionRow(index, 'bottles', isNaN(num) ? (undefined as unknown as number) : num);
+                                  }
+                                }}
+                                onKeyDown={(e) => handleBottlesKeyDown(e, index, prescriptions.length)}
                                 min="1"
                                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
                               />
@@ -3064,6 +4200,78 @@ Dr. Homeopathic Clinic`);
                               </div>
                             </div>
                           ),
+                          bp: (
+                            <div key="bp" className="flex items-start gap-2">
+                              <div className="flex-1">
+                                <label className="block text-sm font-medium text-gray-700 mb-1">BP</label>
+                                <input
+                                  type="text"
+                                  value={bp}
+                                  onChange={(e) => setBp(e.target.value)}
+                                  placeholder="e.g., 120/80"
+                                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1 pt-6">
+                                <button type="button" onClick={() => moveFieldUp('bp')} disabled={index === 0} className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30" title="Move up">↑</button>
+                                <button type="button" onClick={() => moveFieldDown('bp')} disabled={index === additionalNotesFieldOrder.length - 1} className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30" title="Move down">↓</button>
+                              </div>
+                            </div>
+                          ),
+                          pulse: (
+                            <div key="pulse" className="flex items-start gap-2">
+                              <div className="flex-1">
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Pulse</label>
+                                <input
+                                  type="text"
+                                  value={pulse}
+                                  onChange={(e) => setPulse(e.target.value)}
+                                  placeholder="e.g., 72"
+                                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1 pt-6">
+                                <button type="button" onClick={() => moveFieldUp('pulse')} disabled={index === 0} className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30" title="Move up">↑</button>
+                                <button type="button" onClick={() => moveFieldDown('pulse')} disabled={index === additionalNotesFieldOrder.length - 1} className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30" title="Move down">↓</button>
+                              </div>
+                            </div>
+                          ),
+                          tempF: (
+                            <div key="tempF" className="flex items-start gap-2">
+                              <div className="flex-1">
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Temp °F</label>
+                                <input
+                                  type="text"
+                                  value={tempF}
+                                  onChange={(e) => setTempF(e.target.value)}
+                                  placeholder="e.g., 98.6"
+                                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1 pt-6">
+                                <button type="button" onClick={() => moveFieldUp('tempF')} disabled={index === 0} className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30" title="Move up">↑</button>
+                                <button type="button" onClick={() => moveFieldDown('tempF')} disabled={index === additionalNotesFieldOrder.length - 1} className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30" title="Move down">↓</button>
+                              </div>
+                            </div>
+                          ),
+                          weightKg: (
+                            <div key="weightKg" className="flex items-start gap-2">
+                              <div className="flex-1">
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Weight (kg)</label>
+                                <input
+                                  type="text"
+                                  value={weightKg}
+                                  onChange={(e) => setWeightKg(e.target.value)}
+                                  placeholder="e.g., 65"
+                                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1 pt-6">
+                                <button type="button" onClick={() => moveFieldUp('weightKg')} disabled={index === 0} className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30" title="Move up">↑</button>
+                                <button type="button" onClick={() => moveFieldDown('weightKg')} disabled={index === additionalNotesFieldOrder.length - 1} className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30" title="Move down">↓</button>
+                              </div>
+                            </div>
+                          ),
                         };
                         return fieldComponents[field];
                       })}
@@ -3205,15 +4413,24 @@ Dr. Homeopathic Clinic`);
                             <div>
                               <label className="block text-sm font-medium text-gray-700 mb-1">Fee Type</label>
                               <select
-                                value={feeType}
-                                onChange={(e) => setFeeType(e.target.value)}
+                                value={feeTypeId}
+                                onChange={(e) => {
+                                  const selectedFeeTypeId = e.target.value;
+                                  const selectedFee = feeTypes.find(f => f.id === selectedFeeTypeId);
+                                  if (selectedFee) {
+                                    setFeeTypeId(selectedFeeTypeId);
+                                    setFeeType(selectedFee.name);
+                                    setFeeAmount(String(selectedFee.amount || ''));
+                                  }
+                                }}
                                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
                               >
-                                <option value="consultation">Consultation</option>
-                                <option value="followup">Follow-up</option>
-                                <option value="new">New Patient</option>
-                                <option value="emergency">Emergency</option>
-                                <option value="special">Special Consultation</option>
+                                <option value="">Select Fee Type</option>
+                                {feeTypes.map((fee) => (
+                                  <option key={fee.id} value={fee.id}>
+                                    {fee.name} - ₹{fee.amount}
+                                  </option>
+                                ))}
                               </select>
                             </div>
                             
@@ -3283,15 +4500,24 @@ Dr. Homeopathic Clinic`);
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">Fee Type</label>
                           <select
-                            value={feeType}
-                            onChange={(e) => setFeeType(e.target.value)}
+                            value={feeTypeId}
+                            onChange={(e) => {
+                              const selectedFeeTypeId = e.target.value;
+                              const selectedFee = feeTypes.find(f => f.id === selectedFeeTypeId);
+                              if (selectedFee) {
+                                setFeeTypeId(selectedFeeTypeId);
+                                setFeeType(selectedFee.name);
+                                setFeeAmount(String(selectedFee.amount || ''));
+                              }
+                            }}
                             className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
                           >
-                            <option value="consultation">Consultation</option>
-                            <option value="followup">Follow-up</option>
-                            <option value="new">New Patient</option>
-                            <option value="emergency">Emergency</option>
-                            <option value="special">Special Consultation</option>
+                            <option value="">Select Fee Type</option>
+                            {feeTypes.map((fee) => (
+                              <option key={fee.id} value={fee.id}>
+                                {fee.name} - ₹{fee.amount}
+                              </option>
+                            ))}
                           </select>
                         </div>
                         
@@ -3363,14 +4589,21 @@ Dr. Homeopathic Clinic`);
                     >
                       End Consultation
                     </Button>
+                    
+                    <Button
+                      onClick={handleSaveConsultation}
+                      variant="secondary"
+                      className="w-full"
+                    >
+                      Save
+                    </Button>
                   </div>
                 </section>
 
                 {/* Past Visits - Moved to popup */}
               </div>
             </main>
-          </>
-        )}
+        </>
       </div>
 
       {/* Past Visits Popup Modal */}
@@ -3405,14 +4638,21 @@ Dr. Homeopathic Clinic`);
                       {/* Visit Header */}
                       <div className="bg-gray-50 px-4 py-3 flex items-center justify-between">
                         <div>
-                          <p className="font-semibold text-gray-900">
-                            {new Date(visit.visitDate).toLocaleDateString('en-IN', { 
-                              weekday: 'long', 
-                              day: 'numeric', 
-                              month: 'short', 
-                              year: 'numeric' 
-                            })}
-                          </p>
+                          <div className="flex items-center gap-2">
+                            <p className="font-semibold text-gray-900">
+                              {new Date(visit.visitDate).toLocaleDateString('en-IN', { 
+                                weekday: 'long', 
+                                day: 'numeric', 
+                                month: 'short', 
+                                year: 'numeric' 
+                              })}
+                            </p>
+                            {visit.isSelfRepeat && (
+                              <span className="px-2 py-1 rounded-full text-xs font-bold bg-orange-100 text-orange-800">
+                                Self Repeat by P/T
+                              </span>
+                            )}
+                          </div>
                           <p className="text-sm text-gray-500">Visit #{visit.visitNumber}</p>
                         </div>
                         <div className="flex items-center gap-2 flex-wrap">
@@ -3498,27 +4738,37 @@ Dr. Homeopathic Clinic`);
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {visitRx.map((rx, idx) => (
-                                    <tr key={idx} className="border-t border-gray-100">
-                                      <td className="px-3 py-2">
-                                        {rx.isCombination ? (
-                                          <div>
-                                            <span className="text-purple-600 font-medium">{rx.combinationName || rx.medicine}</span>
-                                            {rx.combinationContent && (
-                                              <div className="text-xs text-gray-500 mt-1">{rx.combinationContent}</div>
-                                            )}
-                                          </div>
-                                        ) : (
-                                          rx.medicine
-                                        )}
-                                      </td>
-                                      <td className="px-3 py-2 text-gray-600">{rx.potency || '-'}</td>
-                                      <td className="px-3 py-2 text-gray-600">{rx.doseForm || '-'}</td>
-                                      <td className="px-3 py-2 text-gray-600">{rx.dosePattern || '-'}</td>
-                                      <td className="px-3 py-2 text-gray-600">{rx.frequency || '-'}</td>
-                                      <td className="px-3 py-2 text-gray-600">{rx.duration || '-'}</td>
-                                    </tr>
-                                  ))}
+                                  {visitRx.map((rx, idx) => {
+                                    const hasPatientDeleteRemark = rx.instructions?.includes('[Patient Requested Pharma Delete]');
+                                    return (
+                                      <tr key={idx} className={`border-t border-gray-100 ${hasPatientDeleteRemark ? 'bg-red-50' : ''}`}>
+                                        <td className="px-3 py-2">
+                                          {rx.isCombination ? (
+                                            <div>
+                                              <span className="text-purple-600 font-medium">{rx.combinationName || rx.medicine}</span>
+                                              {rx.combinationContent && (
+                                                <div className="text-xs text-gray-500 mt-1">{rx.combinationContent}</div>
+                                              )}
+                                            </div>
+                                          ) : (
+                                            <div>
+                                              <span>{rx.medicine}</span>
+                                              {hasPatientDeleteRemark && (
+                                                <div className="text-xs text-red-600 font-medium mt-1">
+                                                  ⚠ Patient Requested Deletion
+                                                </div>
+                                              )}
+                                            </div>
+                                          )}
+                                        </td>
+                                        <td className="px-3 py-2 text-gray-600">{rx.potency || '-'}</td>
+                                        <td className="px-3 py-2 text-gray-600">{rx.doseForm || '-'}</td>
+                                        <td className="px-3 py-2 text-gray-600">{rx.dosePattern || '-'}</td>
+                                        <td className="px-3 py-2 text-gray-600">{rx.frequency || '-'}</td>
+                                        <td className="px-3 py-2 text-gray-600">{rx.duration || '-'}</td>
+                                      </tr>
+                                    );
+                                  })}
                                 </tbody>
                               </table>
                             </div>
@@ -3586,6 +4836,325 @@ Dr. Homeopathic Clinic`);
           </div>
         </div>
       )}
+      
+      {showRepeatVisitChoice && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-md p-6 space-y-4">
+            <h3 className="text-lg font-semibold text-gray-900">Repeat Visit Today</h3>
+            <p className="text-sm text-gray-600">
+              Create a new prescription or add medicines to today’s saved prescription?
+            </p>
+            <div className="flex gap-2">
+              <Button
+                variant="primary"
+                className="flex-1"
+                onClick={() => {
+                  setShowRepeatVisitChoice(false);
+                  setSavedVisitId(null);
+                  setPrescriptions([]);
+                  setCaseText('');
+                  setSymptoms([]);
+                  setDiagnosis('');
+                  setAdvice('');
+                  setTestsRequired('');
+                  setPrognosis('');
+                  setRemarksToFrontdesk('');
+                  setBp('');
+                  setPulse('');
+                  setTempF('');
+                  setWeightKg('');
+                }}
+              >
+                Create New
+              </Button>
+              <Button
+                variant="secondary"
+                className="flex-1"
+                onClick={() => {
+                  if (repeatVisitId) {
+                    const v = doctorVisitDb.getById(repeatVisitId) as DoctorVisit | undefined;
+                    if (v) {
+                      setSavedVisitId(v.id);
+                      setCaseText(v.caseText || '');
+                      setSymptoms((v.caseText || '').split('\n').filter((s) => s.trim().length > 0));
+                      setDiagnosis(v.diagnosis || '');
+                      setAdvice(v.advice || '');
+                      setTestsRequired(v.testsRequired || '');
+      setPrognosis(v.prognosis || '');
+      setRemarksToFrontdesk(v.remarksToFrontdesk || '');
+      setBp((v as any).bp || '');
+      setPulse((v as any).pulse || '');
+      setTempF((v as any).tempF || '');
+      setWeightKg((v as any).weightKg || '');
+                      const rx = doctorPrescriptionDb.getByVisit(v.id);
+                      setPrescriptions(rx.map((p) => ({
+                        medicine: p.medicine,
+                        potency: p.potency || '',
+                        quantity: p.quantity,
+                        doseForm: p.doseForm || '',
+                        dosePattern: p.dosePattern || '',
+                        frequency: p.frequency || '',
+                        duration: p.duration || '',
+                        durationDays: p.durationDays || 0,
+                        bottles: p.bottles || 1,
+                        instructions: p.instructions || '',
+                        isCombination: p.isCombination || false,
+                        combinationName: p.combinationName || '',
+                        combinationContent: p.combinationContent || '',
+                      })));
+                    }
+                  }
+                  setShowRepeatVisitChoice(false);
+                }}
+              >
+                Add to Old
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {showPharmacyMini && (
+        <div
+          className={`fixed top-20 ${pharmacyDockSide === 'right' ? 'right-4' : 'left-4'} z-[60] w-96 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden`}
+        >
+          <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100 bg-gray-50">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-gray-800">Pharmacy Queue</span>
+              <span className="text-xs text-gray-500">Live</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                className="p-1 rounded hover:bg-gray-100"
+                title={`Dock to ${pharmacyDockSide === 'right' ? 'left' : 'right'}`}
+                onClick={() => setPharmacyDockSide(pharmacyDockSide === 'right' ? 'left' : 'right')}
+              >
+                <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+              <button
+                className="p-1 rounded hover:bg-gray-100"
+                title="Close"
+                onClick={() => setShowPharmacyMini(false)}
+              >
+                <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div className="max-h-[60vh] overflow-y-auto">
+            {pharmacyLiveItems.length === 0 ? (
+              <div className="p-4 text-sm text-gray-500">No items in pharmacy queue</div>
+            ) : (
+              <ul className="divide-y divide-gray-100">
+                {pharmacyLiveItems.map((item) => {
+                  const patient = patientDb.getById(item.patientId) as Patient | undefined;
+                  const rxList = doctorPrescriptionDb.getByVisit(item.visitId) || [];
+                  const todayISO = new Date().toISOString().split('T')[0];
+                  const clinicApt = item.appointmentId 
+                    ? appointmentDb.getById(item.appointmentId) as Appointment | undefined
+                    : (appointmentDb.getByPatient(item.patientId) as Appointment[]).find((apt: Appointment) => {
+                        const d = new Date(apt.appointmentDate).toISOString().split('T')[0];
+                        return d === todayISO;
+                      });
+                  const clinicStatus = clinicApt ? (clinicApt.status as string) : 'scheduled';
+                  const clinicLabel = clinicStatus === 'in-progress' ? 'Case Taking' 
+                    : clinicStatus === 'sent-to-pharmacy' ? 'Sent to Pharmacy'
+                    : clinicStatus === 'medicines-prepared' ? 'Medicines Prepared'
+                    : clinicStatus.charAt(0).toUpperCase() + clinicStatus.slice(1);
+                  const isStopped = item.status === 'stopped';
+                  return (
+                    <li key={item.id} className="p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-gray-900 text-sm truncate">
+                              {patient ? `${(patient as any).firstName} ${(patient as any).lastName}` : 'Patient'}
+                            </span>
+                            <span className={`px-1.5 py-0.5 rounded-full text-xs font-bold ${
+                              clinicStatus === 'in-progress' ? 'bg-yellow-100 text-yellow-800' :
+                              clinicStatus === 'sent-to-pharmacy' ? 'bg-indigo-100 text-indigo-800' :
+                              clinicStatus === 'medicines-prepared' ? 'bg-green-100 text-green-800' :
+                              'bg-gray-100 text-gray-700'
+                            }`}>
+                              {clinicLabel}
+                            </span>
+                            {item.priority && (
+                              <span className="px-1.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-800">
+                                PRIORITY
+                              </span>
+                            )}
+                            {item.courier && (
+                              <span className="px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800">
+                                COURIER
+                              </span>
+                            )}
+                            {isStopped && (
+                              <span className="px-1.5 py-0.5 rounded-full text-xs font-bold bg-gray-200 text-gray-800">
+                                STOPPED
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-gray-500 mt-0.5 truncate">
+                            {(patient as any)?.registrationNumber} • {rxList.length} medicine(s)
+                          </div>
+                          <div className="text-xs text-gray-400 mt-0.5">
+                            Status: {item.status}
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-2">
+                          <button
+                            className={`px-2 py-1 rounded text-xs ${isStopped ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}`}
+                            title={isStopped ? 'Reopen Prescription' : 'Stop Prescription'}
+                            onClick={() => {
+                              if (isStopped) {
+                                pharmacyQueueDb.update(item.id, { status: 'pending', stopReason: undefined });
+                              } else {
+                                pharmacyQueueDb.stop(item.id, 'Stopped by doctor');
+                              }
+                              if (typeof window !== 'undefined') {
+                                window.dispatchEvent(new CustomEvent('pharmacy-queue-updated'));
+                              }
+                              setPharmacyLiveItems((pharmacyQueueDb.getAll() || []) as PharmacyQueueItem[]);
+                            }}
+                          >
+                            {isStopped ? 'Reopen' : 'Stop'}
+                          </button>
+                          <button
+                            className={`px-2 py-1 rounded text-xs ${item.priority ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-700'}`}
+                            title={item.priority ? 'Remove Priority' : 'Mark Priority'}
+                            onClick={() => {
+                              pharmacyQueueDb.update(item.id, { priority: !item.priority });
+                              if (typeof window !== 'undefined') {
+                                window.dispatchEvent(new CustomEvent('pharmacy-queue-updated'));
+                              }
+                              setPharmacyLiveItems((pharmacyQueueDb.getAll() || []) as PharmacyQueueItem[]);
+                            }}
+                          >
+                            Priority
+                          </button>
+                          <button
+                            className={`px-2 py-1 rounded text-xs ${item.courier ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'}`}
+                            title={item.courier ? 'Unmark Courier' : 'Mark Courier'}
+                            onClick={() => {
+                              pharmacyQueueDb.update(item.id, { courier: !item.courier });
+                              if (typeof window !== 'undefined') {
+                                window.dispatchEvent(new CustomEvent('pharmacy-queue-updated'));
+                              }
+                              setPharmacyLiveItems((pharmacyQueueDb.getAll() || []) as PharmacyQueueItem[]);
+                            }}
+                          >
+                            Courier
+                          </button>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Appointments Board Mini Window */}
+      {showAppointmentsBoard && (
+        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-[60] w-[600px] bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gradient-to-r from-emerald-50 to-emerald-100">
+            <div className="flex items-center gap-2">
+              <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <span className="text-sm font-semibold text-gray-800">Today's Appointments</span>
+              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-600 text-white">
+                {todayAppointments.length}
+              </span>
+            </div>
+            <button
+              className="p-1 rounded hover:bg-emerald-200 transition-colors"
+              title="Close"
+              onClick={() => setShowAppointmentsBoard(false)}
+            >
+              <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          
+          <div className="max-h-[70vh] overflow-y-auto">
+            {todayAppointments.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">
+                <svg className="w-16 h-16 mx-auto text-gray-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                <p>No appointments scheduled for today</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-gray-100">
+                {todayAppointments.map((apt) => (
+                  <div 
+                    key={apt.id} 
+                    className={`p-4 hover:bg-gray-50 transition-colors ${
+                      nextPatientId === apt.patientId ? 'bg-yellow-50 border-l-4 border-yellow-400' : ''
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h3 className="font-semibold text-gray-900">{apt.patientName}</h3>
+                          {apt.tokenNumber && (
+                            <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-indigo-100 text-indigo-800">
+                              Token #{apt.tokenNumber}
+                            </span>
+                          )}
+                          {nextPatientId === apt.patientId && (
+                            <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-yellow-100 text-yellow-800">
+                              NEXT
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-sm text-gray-600">
+                          <span className="font-medium">Reg:</span> {apt.registrationNumber}
+                        </div>
+                        <div className="text-sm text-gray-500 mt-1">
+                          <span className="font-medium">Time:</span> {apt.appointmentTime}
+                          {apt.slotName && <span> • {apt.slotName}</span>}
+                        </div>
+                      </div>
+                      
+                      <div className="flex flex-col gap-2">
+                        <button
+                          onClick={() => handleCallPatient(apt.id, apt.patientId)}
+                          className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium flex items-center gap-2"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                          </svg>
+                          Call
+                        </button>
+                        {patient && patient.id !== apt.patientId && (
+                          <button
+                            onClick={() => handleFlagNextPatient(apt.patientId)}
+                            className={`px-4 py-2 rounded-lg transition-colors text-sm font-medium ${
+                              nextPatientId === apt.patientId
+                                ? 'bg-yellow-600 text-white hover:bg-yellow-700'
+                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            }`}
+                          >
+                            {nextPatientId === apt.patientId ? 'Flagged' : 'Flag Next'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Combination Medicine Modal - Removed, now using inline editor */}
 
@@ -3606,95 +5175,125 @@ Dr. Homeopathic Clinic`);
               {/* Patient Info */}
               <div className="flex justify-between mb-6">
                 <div>
-                  <p className="font-bold">{patient.firstName} {patient.lastName}</p>
-                  <p className="text-sm text-gray-500">Reg: {patient.registrationNumber}</p>
+                  {(!prescriptionSettingsView || prescriptionSettingsView.patient?.name) && (
+                    <p className="font-bold">{patient.firstName} {patient.lastName}</p>
+                  )}
+                  <div className="text-sm text-gray-500">
+                    {(!prescriptionSettingsView || prescriptionSettingsView.patient?.age) && (patient as any)?.age && <span>{(patient as any).age} yrs</span>}
+                    {(!prescriptionSettingsView || prescriptionSettingsView.patient?.sex) && (patient as any)?.sex && <span>{(patient as any).sex ? ` • ${(patient as any).sex}` : ''}</span>}
+                  </div>
+                  {(!prescriptionSettingsView || prescriptionSettingsView.patient?.regNo) && (
+                    <p className="text-sm text-gray-500">Regd No: {patient.registrationNumber}</p>
+                  )}
                 </div>
                 <div className="text-right">
-                  <p className="text-sm text-gray-500">Date: {new Date().toLocaleDateString()}</p>
-                  <p className="text-sm text-gray-500">IP No.: {savedVisitId?.slice(0, 8).toUpperCase() || currentVisit?.id.slice(0, 8).toUpperCase()}</p>
+                  {(!prescriptionSettingsView || prescriptionSettingsView.patient?.visitDate) && (
+                    <p className="text-sm text-gray-500">Date of Visit: {new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'short', day: '2-digit' })}</p>
+                  )}
+                  <p className="text-sm text-gray-500">Visit: #{currentVisit?.visitNumber ?? '-'}</p>
                 </div>
               </div>
               
-              {/* Vital Signs Placeholder */}
-              <div className="border border-gray-300 p-2 mb-6 text-sm">
-                <div className="grid grid-cols-4 gap-4">
-                  <div>BP: _____/_____</div>
-                  <div>Pulse: _____</div>
-                  <div>Temp: _____°F</div>
-                  <div>Weight: _____kg</div>
+              {/* Vitals (show only if filled and enabled) */}
+              {(
+                ((!prescriptionSettingsView || prescriptionSettingsView.additional?.bp) && bp) ||
+                ((!prescriptionSettingsView || prescriptionSettingsView.additional?.pulse) && pulse) ||
+                ((!prescriptionSettingsView || prescriptionSettingsView.additional?.tempF) && tempF) ||
+                ((!prescriptionSettingsView || prescriptionSettingsView.additional?.weightKg) && weightKg)
+              ) && (
+                <div className="mb-4 text-sm text-gray-700">
+                  {(!prescriptionSettingsView || prescriptionSettingsView.additional?.bp) && bp && <span>BP: {bp}</span>}
+                  {((!prescriptionSettingsView || prescriptionSettingsView.additional?.pulse) && pulse) && <span> • Pulse: {pulse}</span>}
+                  {((!prescriptionSettingsView || prescriptionSettingsView.additional?.tempF) && tempF) && <span> • Temp: {tempF}°F</span>}
+                  {((!prescriptionSettingsView || prescriptionSettingsView.additional?.weightKg) && weightKg) && <span> • Weight: {weightKg}kg</span>}
                 </div>
-              </div>
+              )}
               
               {/* Case Summary */}
-              <div className="mb-6">
-                <p className="font-bold border-b border-gray-300 mb-2">Clinical Notes</p>
-                <p className="whitespace-pre-wrap">{caseText || 'No case notes recorded.'}</p>
-              </div>
+              {(!prescriptionSettingsView || prescriptionSettingsView.additional?.caseText) && (
+                <div className="mb-6">
+                  <p className="font-bold border-b border-gray-300 mb-2">Clinical Notes</p>
+                  <p className="whitespace-pre-wrap">{caseText || 'No case notes recorded.'}</p>
+                </div>
+              )}
               
               {/* Prescription */}
               <div className="mb-6">
                 <p className="font-bold border-b border-gray-300 mb-2">Rx</p>
-                <table className="w-full">
-                  <thead>
-                    <tr className="text-left">
-                      <th className="py-1">Medicine</th>
-                      <th className="py-1">Potency</th>
-                      <th className="py-1">Dose</th>
-                      <th className="py-1">Duration</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {prescriptions.map((rx, index) => (
-                      <tr key={index}>
-                        <td className="py-1">
-                          {rx.isCombination ? (
-                            <span className="font-medium">{rx.combinationName}</span>
-                          ) : (
-                            rx.medicine
-                          )}
-                        </td>
-                        <td className="py-1">{rx.potency || '-'}</td>
-                        <td className="py-1">{rx.quantity} {rx.dosePattern}</td>
-                        <td className="py-1">{rx.duration}</td>
+                {prescriptions.length === 0 ? (
+                  <div className="py-4 text-center text-gray-500">No prescriptions added</div>
+                ) : (
+                  <table className="w-full">
+                    <thead>
+                      <tr className="text-left">
+                        {(!prescriptionSettingsView || prescriptionSettingsView.rxFields?.medicine) && (
+                          <th className="py-1">Medicine</th>
+                        )}
+                        {(!prescriptionSettingsView || prescriptionSettingsView.rxFields?.potency) && (
+                          <th className="py-1">Potency</th>
+                        )}
+                        <th className="py-1">Dose</th>
+                        {(!prescriptionSettingsView || prescriptionSettingsView.rxFields?.duration) && (
+                          <th className="py-1">Duration</th>
+                        )}
                       </tr>
-                    ))}
-                    {prescriptions.length === 0 && (
-                      <tr>
-                        <td colSpan={4} className="py-4 text-center text-gray-500">
-                          No prescriptions added
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {prescriptions.map((rx, index) => {
+                        const doseParts: string[] = [];
+                        if ((!prescriptionSettingsView || prescriptionSettingsView.rxFields?.quantity) && rx.quantity) doseParts.push(String(rx.quantity));
+                        if ((!prescriptionSettingsView || prescriptionSettingsView.rxFields?.doseForm) && rx.doseForm) doseParts.push(rx.doseForm);
+                        if ((!prescriptionSettingsView || prescriptionSettingsView.rxFields?.dosePattern) && rx.dosePattern) doseParts.push(rx.dosePattern);
+                        if ((!prescriptionSettingsView || prescriptionSettingsView.rxFields?.frequency) && rx.frequency) doseParts.push(rx.frequency);
+                        const doseText = doseParts.join(" ").trim();
+                        return (
+                          <tr key={index}>
+                            {(!prescriptionSettingsView || prescriptionSettingsView.rxFields?.medicine) && (
+                              <td className="py-1">
+                                {rx.isCombination ? (rx.combinationName || "Combination") : rx.medicine}
+                                {(!prescriptionSettingsView || prescriptionSettingsView.rxFields?.showCombinationDetails) && rx.isCombination && rx.combinationContent && (
+                                  <span className="ml-1 text-xs text-gray-600">({rx.combinationContent})</span>
+                                )}
+                              </td>
+                            )}
+                            {(!prescriptionSettingsView || prescriptionSettingsView.rxFields?.potency) && (
+                              <td className="py-1">{rx.potency || "-"}</td>
+                            )}
+                            <td className="py-1">{doseText || "-"}</td>
+                            {(!prescriptionSettingsView || prescriptionSettingsView.rxFields?.duration) && (
+                              <td className="py-1">{rx.duration || "-"}</td>
+                            )}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
               </div>
               
               {/* Advice */}
-              {advice && (
+              {(!prescriptionSettingsView || prescriptionSettingsView.additional?.advice) && advice && (
                 <div className="mb-6">
                   <p className="font-bold border-b border-gray-300 mb-2">Advice</p>
                   <p>{advice}</p>
                 </div>
               )}
               
-              {/* Next Visit */}
-              {nextVisit && (
-                <div className="mb-6">
-                  <p className="font-medium">Next Visit: {new Date(nextVisit).toLocaleDateString()}</p>
-                </div>
-              )}
+              
               
               {/* Footer */}
               <div className="border-t-2 border-gray-800 pt-4 mt-8">
-                <div className="flex justify-between">
-                  <div>
-                    <p className="text-sm text-gray-500">Consultation Fee: ₹{feeAmount}</p>
-                    {discountPercent && (
-                      <p className="text-sm text-gray-500">Discount: {discountPercent}%</p>
+                <div className="flex justify-between items-end">
+                  <div className="text-left">
+                    {(!prescriptionSettingsView || prescriptionSettingsView.additional?.nextVisit) && nextVisit && (
+                      <p className="font-medium">Next Visit: {new Date(nextVisit).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'short', day: '2-digit' })}</p>
                     )}
                   </div>
                   <div className="text-right">
                     <p className="font-bold">Dr. Signature</p>
+                    {doctorSignatureUrl && (
+                      <img src={doctorSignatureUrl} alt="Doctor Signature" className="mt-2 h-16 max-w-full object-contain" />
+                    )}
                   </div>
                 </div>
               </div>
@@ -3713,6 +5312,23 @@ Dr. Homeopathic Clinic`);
               )}
               
               <div className="flex flex-wrap gap-2 justify-center">
+                {/* Go Back to Edit Button - Only show if consultation ended but not sent to pharmacy */}
+                {isConsultationEnded && !pharmacySent && (
+                  <button
+                    onClick={() => {
+                      setShowPrescriptionPreview(false);
+                      setIsConsultationEnded(false);
+                    }}
+                    className="flex items-center gap-1 px-3 py-2 text-sm bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 transition-colors"
+                    title="Go back to edit case"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 17l-5-5m0 0l5-5m-5 5h12" />
+                    </svg>
+                    Go Back to Edit
+                  </button>
+                )}
+                
                 {/* Print Button */}
                 <button
                   onClick={() => window.print()}
